@@ -3,6 +3,10 @@ Goal: We have an existing architecture from which we will copy all the forward()
       We then reassign some of the fields in that architecture so that there is a mismatch between field classes.
       What we want is to then write a new architecture where those fields are replaced, and in classes that use that
       class, etc...
+
+TODO:
+    - Copy .forward() methods from the original classes.
+    - Make the "SUFFIX" added to modified classes customisable (e.g. "WithHEL", "WithNILF" and so on).
 """
 from typing import Dict, Set, List, Type
 from abc import ABC, abstractmethod
