@@ -1,1 +1,1 @@
-from .compiler import printDifference
+from .declaration.compiler import printDifference

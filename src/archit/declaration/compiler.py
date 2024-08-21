@@ -15,7 +15,7 @@ from torch.nn import Module
 
 import warnings
 
-from .util import *
+from tktkt.util.strings import *
 
 SUFFIX = "_modified"
 

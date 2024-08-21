@@ -1,15 +1,25 @@
-# ArchIt: convert a PyTorch instance into PyTorch architecture classes.
+# ArchIt: <u>A</u>utomatic PyTo<u>r</u>ch ar<u>chi</u>tec<u>t</u>ures 
+ArchIt helps you rewrite PyTorch code for base models augmented at runtime, and lets you put heads on top of models without 
+having to write dedicated task classes again and again.
+
+## `archit.declaration`: Convert a PyTorch instance into PyTorch architecture classes.
 Recursively rewrite a class hierarchy (i.e. generate Python code of PyTorch architectures) so that in-place modifications
 are now defined explicitly.
 
-As an example of this: I have two projects running where I replace the embedding matrix of a `RobertaForMaskedLM` by a 
+As an example of this: I'm involved in two projects where I replace the embedding matrix of a `RobertaForMaskedLM` by a 
 new class. If I want to load a checkpoint of that model, I need to write a new class definition for the `RobertaEmbeddings` 
 that uses my replacement of the `Embedding`, a new `RobertaModel` using the new embeddings, and a new `RobertaForMaskedLM` 
 using that new model. ArchIt writes that code for you.
 
+## `archit.instantiation`: Add heads to a base model, without needing to write `YourModelForThatTask` classes
+Why in the heavens do we need separate classes for `RobertaForTokenClassification` and `DebertaForTokenclassification`?
+The base model encodes tokens into embeddings, and the head, which only cares about the resulting embeddings, converts
+them to logits. Separation of concerns. There is no need to rewrite "model-with-head" classes over and over again for each
+model augmentation.
+
 ## Installation
 ```shell
-pip install "archit @ git+https://github.com/bauwenst/ArchIt.git"
+pip install "archit @ git+https://github.com/bauwenst/ArchIt"
 ```
 
 ## Usage

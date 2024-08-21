@@ -25,3 +25,8 @@ classifiers = [
 dependencies = [
     "torch"
 ]
+
+[project.optional-dependencies]
+github = [
+    "tktkt[github] @ git+https://github.com/bauwenst/TkTkT"
+]
