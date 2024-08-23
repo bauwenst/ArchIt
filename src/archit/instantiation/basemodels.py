@@ -1,4 +1,3 @@
-import torch
 from torch import Tensor
 from transformers.models.roberta import RobertaModel, RobertaConfig
 
@@ -8,7 +7,7 @@ from .abstracts import BaseModel, BaseModelConfig, BMOWPACA
 class RobertaBaseModel(BaseModel[RobertaConfig]):
 
     def __init__(self, config: RobertaConfig):
-        super().__init__(config)
+        super().__init__(config)  # TODO: Possibly, rather than assigning a field in the subclass, you want to assign a field self.base_model in the BaseModel class. Its constructor signature would be __init__(config, raw_model). Only reason you wouldn't do this is if .from_pretrained needs you to specifically name the field after the model (e.g. .roberta, .vit, etc...).
         self.roberta = RobertaModel(config)
 
     def forward(
@@ -24,12 +23,18 @@ class RobertaBaseModel(BaseModel[RobertaConfig]):
             **kwargs
         )  # Note that this call is Any-typed. This is exactly we we need to type-cast by declaring the return type as BMOWPACA.
 
-    def convertConfig(self) -> BaseModelConfig:
+    @classmethod
+    def convertConfig(cls, raw_config: RobertaConfig) -> BaseModelConfig:
         return BaseModelConfig(
-            hidden_size=self.config.hidden_size,
-            hidden_dropout_prob=self.config.hidden_dropout_prob,
-            vocab_size=self.config.vocab_size,
+            hidden_size=raw_config.hidden_size,
+            hidden_dropout_prob=raw_config.hidden_dropout_prob,
+            vocab_size=raw_config.vocab_size,
 
-            num_hidden_layers=self.config.num_hidden_layers,
-            num_attention_heads=self.config.num_attention_heads
+            num_hidden_layers=raw_config.num_hidden_layers,
+            num_attention_heads=raw_config.num_attention_heads
         )
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return RobertaConfig

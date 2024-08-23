@@ -13,7 +13,7 @@ class TokenClassificationHeadConfig(HeadConfig):
 class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: TokenClassificationHeadConfig):
-        super().__init__(base_config, head_config)
+        super().__init__()
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense   = nn.Linear(base_config.hidden_size, head_config.num_labels)
 
@@ -28,6 +28,11 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
         x = self.dense(x)  # B x L x H -> B x L x C
         return x
 
+    @classmethod
+    @property
+    def config_class(cls):
+        return TokenClassificationHeadConfig
+
 
 @dataclass
 class SequenceClassificationHeadConfig(HeadConfig):
@@ -40,7 +45,7 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
     """
 
     def __init__(self, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
-        super().__init__(base_config, head_config)
+        super().__init__()
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense1  = nn.Linear(base_config.hidden_size, base_config.hidden_size)
         self.dense2  = nn.Linear(base_config.hidden_size, head_config.num_labels)
@@ -66,6 +71,11 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
         x = self.dropout(x)
         x = self.dense2(x)
         return x
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return SequenceClassificationHeadConfig
 
 
 class MeanPooler:

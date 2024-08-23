@@ -1,4 +1,4 @@
-# ArchIt: <u>A</u>utomatic PyTo<u>r</u>ch ar<u>chi</u>tec<u>t</u>ures 
+# ArchIt: <ins>A</ins>utomatic PyTo<ins>r</ins>ch ar<ins>chi</ins>tec<ins>t</ins>ures 
 ArchIt helps you rewrite PyTorch code for base models augmented at runtime, and lets you put heads on top of models without 
 having to write dedicated task classes again and again.
 
