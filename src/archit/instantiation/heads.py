@@ -33,6 +33,10 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
     def config_class(cls):
         return TokenClassificationHeadConfig
 
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "ForTokenClassification"
+
 
 @dataclass
 class SequenceClassificationHeadConfig(HeadConfig):
@@ -76,6 +80,10 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
     @property
     def config_class(cls):
         return SequenceClassificationHeadConfig
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "ForTokenClassification"
 
 
 class MeanPooler:

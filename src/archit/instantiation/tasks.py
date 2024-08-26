@@ -1,9 +1,13 @@
 """
 Links (1) which head belongs to which task and (2) which loss belongs to which task and how it is computed from logits and labels.
 
-TODO:  You would then probably want a switch in LaMoTO that recognises when it should default to ArchIt architectures and when to use
+TODO:  You would then probably want a detection in LaMoTO that recognises when it should default to ArchIt architectures and when to use
        HuggingFace's auto class to use a native architecture like RobertaForSequenceClassification or GPT2ForCausalLM.
        (You always want to use ArchIt EXCEPT WHEN the given checkpoint also contains head weights for that specific task.)
+       You'll need an extra hyperparameter for whether or not you want this feature, because what we won't support is
+       initialising a HuggingFace ModelForTask with an ArchIt head config. Hence, if you have a head config that says
+       you want 10 labels, but you want to take the weights from only the base model of a HuggingFace checkpoint of the
+       same task except with 2 labels, we're going to ignore the head config by default.
 """
 from torch import Tensor, FloatTensor
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss

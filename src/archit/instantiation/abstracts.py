@@ -17,13 +17,12 @@ Two design choices that I will highlight:
       autocompletion, and if you need to override a variable signature with a type invocation, you're doing it wrong.
 
 TODO:
-    - We don't necessarily want to support .from_pretrained() on ModelWithHead checkpoints. It'd be nice to have it, but
-      right now, we should focus on having a way to get the base model initialised from a checkpoint.
+    - Can you initialise the base model from a base model checkpoint, INSIDE a ModelWithHead.from_pretrained()?
+        > What we can currently do is either accept a ModelWithHead checkpoint or accept a BaseModel checkpoint BUT only
+          read the config. We can't read the weights for the latter.
         - We have at least one way to do it, which is to override .from_pretrained() and just call BaseModel.from_pretrained()
           inside. (May require having the model stored in the same field of BaseModel every time so we can reassign it.)
-        - Since .from_pretrained() parses a checkpoint by instantiating cls(config) and then querying the weights file,
-          one thing you could try to do is to sneak an argument of the base model class into that constructor so that it
-          constructs an instance of e.g. RobertaModel without knowing it will in advance. ---> Doing this right now.
+          The problem is of course that we want to support ModelWithHead.from_pretrained() from an ACTUAL ModelWithHead checkpoint too!
 """
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
@@ -32,6 +31,7 @@ from typing import Optional, TypeVar, Generic, Type, Union, Tuple
 from torch import Tensor, FloatTensor
 from torch.nn import Module
 from torch.nn.modules.loss import _Loss
+from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions as BMOWPACA
 from transformers.utils import ModelOutput
@@ -76,6 +76,7 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     def __init__(self, config: PC):
         super().__init__(config)
         self.config: PC = self.config  # Type annotation for the existing field self.config. The annotation is not updated automatically if you just type-hint this class's constructor argument, because self.config gets its type from the signature of the super constructor. The alternative to a generic is that you repeat this expression here for each separate config.
+        self.core = self.buildCore(config)
 
     @abstractmethod
     def forward(
@@ -104,9 +105,18 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
 
     @classmethod
     @abstractmethod
-    def convertConfig(cls, raw_config: PC) -> BaseModelConfig:
+    def standardiseConfig(cls, raw_config: PC) -> BaseModelConfig:
         """
         Turn the HuggingFace config into a standardised interface.
+        """
+        pass
+
+    @classmethod
+    @abstractmethod
+    def buildCore(cls, raw_config: PC) -> PreTrainedModel:
+        """
+        The core is where most of the computation for .forward() happens, and is the HuggingFace object that would
+        be called .base_model otherwise.
         """
         pass
 
@@ -152,6 +162,16 @@ class Head(Module, Generic[HC], ABC):
         Necessary so that when you call .from_pretrained() on a ModelWithHead class, it knows how to parse the associated config.
         """
         raise NotImplementedError
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        """
+        HuggingFace defines its heads only as part of a "...For..." model+head class. That means there is an equivalence
+        between some of ArchIt's standalone head classes and HuggingFace's model+head classes. We assume that the same
+        class suffix always implies the presence of the same head. The equivalence between ArchIt's model+head and
+        HuggingFace's model+head architectures is less precise because ArchIt separates out tasks that still use the same head.
+        """
+        return "/"
 
 
 @dataclass
@@ -304,7 +324,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
             checkpoint,
             # Unnamed arguments (*args) passed to PretrainedModel.from_pretrained() are passed straight to the constructor of this class, except the checkpoint is replaced by a config.
             base_model_shell,
-            cls.buildHead(base_model_class.convertConfig(base_model_config), head_config),
+            cls.buildHead(base_model_class.standardiseConfig(base_model_config), head_config),
             cls.buildLoss(),
 
             # Keyword arguments (**kwargs) are passed first to PretrainedConfig.from_pretrained() and only what remains ends up in PretrainedModel.from_pretrained(). Do note that PretrainedConfig.from_pretrained() does NOT pass these **kwargs to the constructor and only uses them for administrative stuff by default; I forcibly add them in get_config_dict().
@@ -318,6 +338,35 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         return cls(
             CombinedConfig(base_model_config=base_model.config, head_config=head_config),
             base_model,
-            cls.buildHead(base_model.convertConfig(base_model.config), head_config),
+            cls.buildHead(base_model.standardiseConfig(base_model.config), head_config),
             cls.buildLoss()
         )
+
+    base_model_prefix = "model.core"
+
+    @classmethod
+    def _load_pretrained_model(cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
+        """
+        Indirection to trick PyTorch into recognising the base model in a checkpoint.
+
+        Here's the situation: when a Module hierarchy is saved (resulting in a "state dictionary" with signature
+        something like Dict[str, Module]), every Module is identified by a dot-separated sequence of fields to traverse to get to it.
+        In HuggingFace, every model stores a "prefix" which is equal to the name of the variable you store the base model in
+        when you pack it with a head. For example, the prefix for RoBERTa is "roberta" and RobertaForMaskedLM has two fields [roberta: RobertaModel, lm_head: RobertaLMHead].
+        On the other hand, RobertaModel has no field "roberta" because it is the base model.
+
+        The assumption is now that you only ever call .from_pretrained() between models that have the same prefix. The
+        4 possible variations of this situation are supported by looking for the prefix and removing it where needed,
+        and then assuming all module identifiers are an exact match.
+
+        What we want to do, however, is load from a [roberta, lm_head] model into a [wrapper, head] where we want
+        the roberta field to land in the field of model. This is impossible, because finding the model weights require trimming the
+        "roberta" prefix from the state dict but trimming "wrapper.model" from the model skeleton. So, what we do is trim
+        the "roberta" prefix from the state dict while pretending that "wrapper.model" is the prefix and that the [roberta, lm_head]
+        model is actually a base model.
+        """
+        if set(state_dict.keys()) != {"model", "head"}:  # You've loaded a HF checkpoint.
+            consume_prefix_in_state_dict_if_present(state_dict, model.model.core.base_model_prefix + ".")  # In-place.
+            loaded_keys = list(state_dict.keys())
+
+        return super()._load_pretrained_model(model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs)
