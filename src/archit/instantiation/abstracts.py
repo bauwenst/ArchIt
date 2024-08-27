@@ -33,7 +33,7 @@ from torch.nn import Module
 from torch.nn.modules.loss import _Loss
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions as BMOWPACA
+from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
 from typing_extensions import Self
 
@@ -84,10 +84,10 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         input_ids: Tensor,
         attention_mask: Tensor,
         **kwargs
-    ) -> BMOWPACA:
+    ) -> AllHiddenStatesAndPooling:
         pass
 
-    def __call__(self, *args, **kwargs) -> BMOWPACA:
+    def __call__(self, *args, **kwargs) -> AllHiddenStatesAndPooling:
         return super().__call__(*args, **kwargs)  # Just calls forward() which we know is adapted to the model to return the BMOWPACA. This method is here just for type annotation of 'model(x)'.
 
     #########################
@@ -130,7 +130,7 @@ class Head(Module, Generic[HC], ABC):
     @abstractmethod
     def forward(
         self,
-        encoder_output: BMOWPACA,
+        encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,
         **kwargs
     ) -> Tensor:
@@ -176,12 +176,14 @@ class Head(Module, Generic[HC], ABC):
 
 @dataclass
 class ModelWithHeadOutput(ModelOutput):
-    base_model_output: BMOWPACA
     logits: Tensor
-    loss: Optional[Tensor]
+    base_model_output: Optional[AllHiddenStatesAndPooling]=None  # Has to be optional because of some stupid rule in ModelOutput.__post_init__()
+    loss: Optional[Tensor]=None
 
 
 class CombinedConfig(PretrainedConfig, Generic[PC,HC]):
+
+    model_type = "ArchIt (not recognised by AutoModel)"
 
     def __init__(self, base_model_config: Union[dict,PC]=None, head_config: Union[dict,HC]=None,
                  base_model_config_class: Type[PC]=None, head_config_class: Type[HC]=None, **kwargs):
@@ -250,6 +252,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         """
         super().__init__(combined_config)
         self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
+        self.supports_gradient_checkpointing = model.core.supports_gradient_checkpointing
 
         self.model         = model
         self.head          = head

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from torch import nn, Tensor
 import torch
 
-from .abstracts import Head, HeadConfig, BaseModelConfig, BMOWPACA
+from .abstracts import Head, HeadConfig, BaseModelConfig, AllHiddenStatesAndPooling
 
 
 @dataclass
@@ -19,7 +19,7 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
 
     def forward(
         self,
-        encoder_output: BMOWPACA,
+        encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,
         **kwargs
     ) -> Tensor:
@@ -58,7 +58,7 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
 
     def forward(
         self,
-        encoder_output: BMOWPACA,
+        encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,
         **kwargs
     ) -> Tensor:
@@ -84,6 +84,100 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForTokenClassification"
+
+
+@dataclass
+class MaskedLMHeadConfig(HeadConfig):
+    pass
+
+
+class MaskedLMHead(Head[MaskedLMHeadConfig]):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
+        super().__init__()
+        self.dense1     = nn.Linear(base_config.hidden_size, base_config.hidden_size)
+        self.layer_norm = nn.LayerNorm(base_config.hidden_size, eps=1e-5)
+        self.dense2     = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=True)
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,
+        **kwargs
+    ) -> Tensor:
+        x = encoder_output.last_hidden_state
+        x = self.dense1(x)
+        x = nn.functional.gelu(x)
+        x = self.layer_norm(x)
+        x = self.dense2(x)
+        return x
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return MaskedLMHeadConfig
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "ForMaskedLM"
+
+
+@dataclass
+class CausalLMHeadConfig(HeadConfig):
+    pass
+
+
+class CausalLMHead(Head[CausalLMHeadConfig]):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
+        super().__init__()
+        self.dense = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=False)
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,
+        **kwargs
+    ) -> Tensor:
+        return self.dense(encoder_output.last_hidden_state)
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return CausalLMHeadConfig
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "ForCausalLM"
+
+
+@dataclass
+class ExtractiveQAHeadConfig(HeadConfig):
+    pass
+
+
+class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
+        super().__init__()
+        self.dense = nn.Linear(base_config.hidden_size, 2)
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,
+        **kwargs
+    ) -> Tensor:
+        return self.dense(encoder_output.last_hidden_state)
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return ExtractiveQAHeadConfig
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "ForQuestionAnswering"
 
 
 class MeanPooler:
