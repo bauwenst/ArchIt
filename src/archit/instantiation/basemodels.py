@@ -27,7 +27,7 @@ class RobertaBaseModel(BaseModel[RobertaConfig]):
 
     @classmethod
     def buildCore(cls, raw_config: RobertaConfig):
-        return RobertaModel(raw_config)
+        return RobertaModel(raw_config, add_pooling_layer=False)
 
     @classmethod
     def standardiseConfig(cls, raw_config: RobertaConfig) -> BaseModelConfig:

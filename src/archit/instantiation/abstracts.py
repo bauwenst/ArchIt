@@ -27,7 +27,9 @@ TODO:
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
 from typing import Optional, TypeVar, Generic, Type, Union, Tuple
+from typing_extensions import Self
 
+import torch
 from torch import Tensor, FloatTensor
 from torch.nn import Module
 from torch.nn.modules.loss import _Loss
@@ -35,7 +37,6 @@ from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
-from typing_extensions import Self
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead"]
 
@@ -126,6 +127,22 @@ class Head(Module, Generic[HC], ABC):
     Adapter around implementations (or just implementations themselves) of heads that take BMOWPACA as input and
     spit out a tensor as output.
     """
+
+    def __init__(self):
+        super().__init__()
+        self.post_init()
+
+    def post_init(self):
+        self.apply(self._init_weights)  # Recursively applies the given function to all child Modules and then self.
+
+    def _init_weights(self, module: Module):
+        if isinstance(module, torch.nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02...
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, torch.nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
 
     @abstractmethod
     def forward(
@@ -219,6 +236,23 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC]):
         self.base_model_config = base_model_config
         self.head_config       = head_config
 
+    def __getattr__(self, item):
+        """
+        This is used as the fallback when self.item does not exist.
+        We try to get it from the raw PretrainedConfig of the base model which is likely what the user meant.
+
+        There is a place somewhere in Huggingface where deepcopy() is called on the config, which tries to invoke
+        hasattr() (equivalent of .__getattr__()) and .__setattr__(). To prevent a stack overflow (0xC00000FD), we first
+        check whether a method with __...__ is asked for, which we don't handle ourselves.
+        """
+        try:
+            return super().__getattr__(item)  # The old implementation. Will find methods and fields if they exist.
+        except AttributeError:
+            if "base_model_config" in self.__dict__:
+                return getattr(self.base_model_config, item)  # If the field self.base_model_config doesn't exist, you call this same __getattr__ method recursively, hence the "if" around it.
+            else:
+                raise AttributeError(item)
+
     def to_dict(self) -> dict:
         d = super().to_dict()
         for k in list(d.keys()):
@@ -254,22 +288,23 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
         self.supports_gradient_checkpointing = model.core.supports_gradient_checkpointing
 
-        self.model         = model
-        self.head          = head
+        self.model: BaseModel[PC] = model
+        self.head: Head[HC]       = head
         self.loss_function = loss
 
     def forward(
         self,
         input_ids: Tensor,
         attention_mask: Tensor,
-        labels: Tensor,
+        labels: Optional[Tensor]=None,
+        output_hidden_states: bool=False,  # False by default because otherwise the output will be tuple-ified into (logits, hidden_states) rather than just the logits, and this breaks metrics relying on EvalPrediction objects.
         **kwargs
     ) -> ModelWithHeadOutput:
         base_output = self.model(input_ids, attention_mask, **kwargs)
         logits      = self.head(base_output, attention_mask, **kwargs)
         return ModelWithHeadOutput(
-            base_model_output=base_output,
             logits=logits,
+            base_model_output=base_output if output_hidden_states else None,
             loss=self.computeLoss(logits, labels) if labels is not None else None
         )
 
@@ -305,7 +340,17 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         pass
 
     @classmethod
-    def from_pretrained(cls, checkpoint: str, base_model_class: Type[BaseModel], head_config: HC=None) -> Self:
+    def fromModelAndHeadConfig(cls, base_model: BaseModel, head_config: HC) -> Self:
+        """Expects a model that has already been loaded, and assumes you want the head randomised."""
+        return cls(
+            CombinedConfig(base_model_config=base_model.config, head_config=head_config),
+            base_model,
+            cls.buildHead(base_model.standardiseConfig(base_model.config), head_config),
+            cls.buildLoss()
+        )
+
+    @classmethod
+    def from_pretrained(cls, checkpoint: str, base_model_class: Type[BaseModel], head_config: HC=None) -> "ModelWithHead[PC,HC]":  # Can't use Self here because it is trumped by the strange return type of the call inside the function.
         """
         Load the model from an existing checkpoint. Distinguishes between two cases:
             - The given checkpoint is of the correct model-with-head. In that case, no head config is needed.
@@ -337,39 +382,81 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         )
 
     @classmethod
-    def fromModelAndHeadConfig(cls, base_model: BaseModel, head_config: HC) -> Self:
-        return cls(
-            CombinedConfig(base_model_config=base_model.config, head_config=head_config),
-            base_model,
-            cls.buildHead(base_model.standardiseConfig(base_model.config), head_config),
-            cls.buildLoss()
-        )
-
-    base_model_prefix = "model.core"
-
-    @classmethod
     def _load_pretrained_model(cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
         """
-        Indirection to trick PyTorch into recognising the base model in a checkpoint.
+        Indirection to trick PyTorch into recognising the base model in a checkpoint during .from_pretrained() on this class.
 
-        Here's the situation: when a Module hierarchy is saved (resulting in a "state dictionary" with signature
-        something like Dict[str, Module]), every Module is identified by a dot-separated sequence of fields to traverse to get to it.
-        In HuggingFace, every model stores a "prefix" which is equal to the name of the variable you store the base model in
-        when you pack it with a head. For example, the prefix for RoBERTa is "roberta" and RobertaForMaskedLM has two fields [roberta: RobertaModel, lm_head: RobertaLMHead].
-        On the other hand, RobertaModel has no field "roberta" because it is the base model.
+        Here's the background:
+        - When a PyTorch Module hierarchy is saved (resulting in a "state dictionary" with signature
+          something like Dict[str, Module]), every Module is identified by a dot-separated sequence of fields to traverse
+          to get to it.
 
-        The assumption is now that you only ever call .from_pretrained() between models that have the same prefix. The
-        4 possible variations of this situation are supported by looking for the prefix and removing it where needed,
-        and then assuming all module identifiers are an exact match.
+        - In HuggingFace, you have headless models and models with heads. A headless model's top-level modules are its
+          immediate components like embeddings and an encoder and so on. A model with head also has top-level modules,
+          among which one very special top-level module that is a headless model, stored in a field that is named as the
+          "prefix" of that headless model: for example, the prefix for RoBERTa is "roberta", which means that a model with head
+          like RobertaForMaskedLM must at least have a field named "roberta". Indeed, it has two fields in this case:
+          [roberta: RobertaModel, lm_head: RobertaLMHead].
+          On the other hand, RobertaModel has no field "roberta" because it is the base model.
 
-        What we want to do, however, is load from a [roberta, lm_head] model into a [wrapper, head] where we want
-        the roberta field to land in the field of model. This is impossible, because finding the model weights require trimming the
-        "roberta" prefix from the state dict but trimming "wrapper.model" from the model skeleton. So, what we do is trim
-        the "roberta" prefix from the state dict while pretending that "wrapper.model" is the prefix and that the [roberta, lm_head]
-        model is actually a base model.
+        - The assumption is that you only ever call .from_pretrained() between models that have the same prefix. The
+          4 possible variations of this situation are supported by looking for the prefix and removing it where needed,
+          and then assuming all module identifiers are an exact match.
+
+        Now, what we want to do, however, is load from a [roberta, lm_head] model into a [wrapper, head] where we want
+        the roberta field to land in the nested field wrapper.core. This is impossible by trimming off one string from
+        none, one, or both of these, because finding the headless model's weights requires trimming the "roberta" prefix
+        from all identifiers in the state dict, yet we want them to be matched to the fields you get by trimming "wrapper.core"
+        from our skeleton.
+
+        So, what this method does is optionally trim the "roberta" prefix from the state dict. We then pretend that
+        "wrapper.model" has always been the prefix that indicates a model with head. Because [roberta, lm_head] doesn't have it,
+        it must be a base model. Same for an actual base model which also doesn't have it. Meanwhile, our skeleton always
+        has it, so it must be a model-with-head, and HuggingFace will automatically deal with it.
+
+        Note that you can't actually "trim off" a prefix from the identifiers *of the skeleton*, because unlike the
+        loaded checkpoint, it is not a dictionary, but an object. Normally this is done by calling modelwithhead."prefix"
+        and loading the headless model's components into that reference instead. This is an extra problem for us because our
+        headless model components live in a field of a field of the model with head. This is why this class also implements
+        __getattr__ to support dot-containing field names.
+
+        HuggingFace is actually tricked by these: it uses string operations to figure out that there should be no missing
+        fields and reports this success, yet meanwhile it won't find the dot-containing field and not load the weights
+        into the model. To actually know the load succeeded, go into modeling_utils.py to the definition of load(), and
+        replace the line that defines "args" by:
+        ```
+            print("Checking prefix:", prefix)
+            missing = []
+            unexpected = []
+            args = (state_dict, prefix, local_metadata, True, missing, unexpected, error_msgs)
+        ```
+        Then in the non-DeepSpeed branch below that, replace the call to module._load_from_state_dict(*args) by:
+        ```
+            print("\tCandidates:", [key for key in state_dict if key.startswith(prefix) and "." not in key[len(prefix):]])
+            module._load_from_state_dict(*args)
+            print("\tMissing:", missing)
+            print("\tUnexpected:", unexpected)
+        ```
+        Now you get a perfect picture of which weights are actually taken from the checkpoint to load into your model.
         """
         if set(state_dict.keys()) != {"model", "head"}:  # You've loaded a HF checkpoint.
             consume_prefix_in_state_dict_if_present(state_dict, model.model.core.base_model_prefix + ".")  # In-place.
             loaded_keys = list(state_dict.keys())
 
         return super()._load_pretrained_model(model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs)
+
+    base_model_prefix = "model.core"
+
+    def __getattr__(self, item):
+        """
+        See _load_pretrained_model() for explanation of this method.
+        """
+        if "." not in item:  # As if we never overrode it.
+            return super().__getattr__(item)
+        else:
+            # print("> Tried accessing nested field", item)
+            obj = self
+            for name in item.split("."):
+                # print("\t> Accessing", obj.__class__.__name__ + "." + name)
+                obj = getattr(obj, name)
+            return obj
