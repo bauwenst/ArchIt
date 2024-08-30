@@ -1,8 +1,18 @@
 from dataclasses import dataclass
-from torch import nn, Tensor
+from typing import Tuple
+
 import torch
+from torch import nn, Tensor
 
 from .abstracts import Head, HeadConfig, BaseModelConfig, AllHiddenStatesAndPooling
+from .basemodels import BaseModelExtendedConfig
+
+__all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
+           "SequenceClassificationHead", "SequenceClassificationHeadConfig",
+           "MaskedLMHead", "MaskedLMHeadConfig",
+           "CausalLMHead", "CausalLMHeadConfig",
+           "ExtractiveQAHead", "ExtractiveQAHeadConfig",
+           "DependencyParsingHead", "DependencyParsingHeadConfig"]
 
 
 @dataclass
@@ -178,6 +188,60 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForQuestionAnswering"
+
+
+from dataclasses import dataclass
+from supar import modules as snn
+
+
+@dataclass
+class DependencyParsingHeadConfig(HeadConfig):
+    extended_model_config: BaseModelExtendedConfig
+
+    final_hidden_size_arcs: int=500
+    final_hidden_size_relations: int=100
+    head_dropout: float=0.33  # Dropout after the model and dropout inside the head.
+    standardisation_exponent: int=0  # The scores of the biaffine part of the head can be scaled by 1/hidden_size^e with e some exponent. For some reason it must be an int.
+
+    num_labels: int=0
+
+
+class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: DependencyParsingHeadConfig):
+        super().__init__()
+        self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
+
+        self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
+        self.arc_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
+        self.rel_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)
+        self.rel_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)
+
+        self.arc_attn = snn.Biaffine(n_in=head_config.final_hidden_size_arcs, scale=head_config.standardisation_exponent, bias_x=True, bias_y=False)
+        self.rel_attn = snn.Biaffine(n_in=head_config.final_hidden_size_relations, n_out=head_config.num_labels, bias_x=True, bias_y=True)
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,  # This is assumed to be at the word level, not token level.
+        **kwargs
+    ) -> Tuple[Tensor,Tensor]:
+        x = encoder_output.last_hidden_state  # These are also assumed to be embeddings at the word level.
+        x = self.dropout(x)
+
+        arc_d = self.arc_mlp_d(x)
+        arc_h = self.arc_mlp_h(x)
+        rel_d = self.rel_mlp_d(x)
+        rel_h = self.rel_mlp_h(x)
+
+        s_arc = self.arc_attn(arc_d, arc_h).masked_fill_(~attention_mask.ge(0).unsqueeze(1), -1e32)  # batch_size x seq_len x seq_len
+        s_rel = self.rel_attn(rel_d, rel_h).permute(0, 2, 3, 1)                                      # batch_size x seq_len x seq_len x n_rels
+        return s_arc, s_rel
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return DependencyParsingHeadConfig
 
 
 class MeanPooler:

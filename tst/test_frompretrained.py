@@ -1,3 +1,5 @@
+from archit.util import torchPrint
+
 
 def test_equivalence_robertafortokens():
     """
@@ -16,7 +18,7 @@ def test_equivalence_robertafortokens():
     model_hf     = AutoModelForTokenClassification.from_pretrained("roberta-base", num_labels=19)
 
     # First of all: check that the encoders are equal.
-    roberta_archit: RobertaModel = model_archit.model.core
+    roberta_archit: RobertaModel = model_archit.model.base_model
     roberta_hf: RobertaModel     = model_hf.roberta
     assert torch.all(roberta_hf.embeddings.word_embeddings.weight == roberta_archit.embeddings.word_embeddings.weight).item()
     assert torch.all(roberta_hf.encoder.layer[5].output.dense.weight == roberta_archit.encoder.layer[5].output.dense.weight)
@@ -42,5 +44,21 @@ def test_equivalence_robertafortokens():
         assert torch.all(logits1 == logits2).item()
 
 
+def test_robertafordp():
+    """
+    Can you load the DP architecture?
+    """
+    from archit.instantiation.basemodels import RobertaBaseModel
+    from archit.instantiation.heads import DependencyParsingHeadConfig, BaseModelExtendedConfig
+    from archit.instantiation.tasks import ForDependencyParsing
+
+    model_with_head = ForDependencyParsing.from_pretrained("roberta-base", RobertaBaseModel, DependencyParsingHeadConfig(
+        extended_model_config=BaseModelExtendedConfig()
+    ))
+    torchPrint(model_with_head)
+    print(model_with_head.model.base_model.embeddings.word_embeddings.weight)
+
+
 if __name__ == "__main__":
-    test_equivalence_robertafortokens()
+    # test_equivalence_robertafortokens()
+    test_robertafordp()

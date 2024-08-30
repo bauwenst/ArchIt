@@ -37,8 +37,11 @@ from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
+Tensors = Tuple[Tensor, ...]
+OneOrMoreTensors = Union[Tensor, Tensors]
+HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors, see e.g. the dependency parsing head.
 
-__all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead"]
+__all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
 
 @dataclass
@@ -56,16 +59,10 @@ class BaseModelConfig:
     # Will not be relevant, but should still be available on base model configs:
     num_hidden_layers: int
     num_attention_heads: int
+    context_length: int
 
 
-class HeadConfig:
-    pass
-
-
-HC = TypeVar("HC", bound=HeadConfig)
 PC = TypeVar("PC", bound=PretrainedConfig)
-
-
 class BaseModel(PreTrainedModel, Generic[PC], ABC):
     """
     Adapter around HuggingFace transformer encoders to have the same input-output signature.
@@ -77,19 +74,31 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     def __init__(self, config: PC):
         super().__init__(config)
         self.config: PC = self.config  # Type annotation for the existing field self.config. The annotation is not updated automatically if you just type-hint this class's constructor argument, because self.config gets its type from the signature of the super constructor. The alternative to a generic is that you repeat this expression here for each separate config.
-        self.core = self.buildCore(config)
+        self._core = self.buildCore(config)  # Private field because users should refer to .hf to access the HuggingFace model.
 
     @abstractmethod
     def forward(
         self,
         input_ids: Tensor,
         attention_mask: Tensor,
+        do_drop_intermediates: bool=True,
         **kwargs
     ) -> AllHiddenStatesAndPooling:
         pass
 
     def __call__(self, *args, **kwargs) -> AllHiddenStatesAndPooling:
         return super().__call__(*args, **kwargs)  # Just calls forward() which we know is adapted to the model to return the BMOWPACA. This method is here just for type annotation of 'model(x)'.
+
+    @property
+    def base_model(self) -> PreTrainedModel:
+        """
+        Returns a reference to the raw HuggingFace model beneath this BaseModel.
+        Slightly confusing naming; originally it was called ".hf" but then you had .hf and .base_model both being suggested
+        and that makes the interface cluttered.
+
+        self._core is not always instantiated, that's why you shouldn't refer to it as a user.
+        """
+        return self._core
 
     #########################
     ##### CLASS METHODS #####
@@ -122,6 +131,27 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         pass
 
 
+class RecursiveSerialisable(ABC):
+    """
+    Small class that implements a recursive to_dict() method on top of __dict__.
+    """
+
+    def _fields_to_dict(self):
+        return self.__dict__
+
+    def to_dict(self) -> dict:
+        d = self._fields_to_dict()
+        for k in list(d.keys()):
+            try:
+                d[k] = d[k].to_dict()  # If d[k] has the method, it must be executed.
+            except:
+                pass  # If d[k] does not have the method, it is assumed to be immediately serialisable. No .__dict__ is called on it either.
+        return d
+
+class HeadConfig(RecursiveSerialisable):
+    pass
+
+HC = TypeVar("HC", bound=HeadConfig)
 class Head(Module, Generic[HC], ABC):
     """
     Adapter around implementations (or just implementations themselves) of heads that take BMOWPACA as input and
@@ -150,10 +180,10 @@ class Head(Module, Generic[HC], ABC):
         encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,
         **kwargs
-    ) -> Tensor:
+    ) -> HeadOutput:
         pass
 
-    def __call__(self, *args, **kwargs) -> Tensor:
+    def __call__(self, *args, **kwargs) -> HeadOutput:
         return super().__call__(*args, **kwargs)
 
     #########################
@@ -193,12 +223,12 @@ class Head(Module, Generic[HC], ABC):
 
 @dataclass
 class ModelWithHeadOutput(ModelOutput):
-    logits: Tensor
+    logits: OneOrMoreTensors
     base_model_output: Optional[AllHiddenStatesAndPooling]=None  # Has to be optional because of some stupid rule in ModelOutput.__post_init__()
     loss: Optional[Tensor]=None
 
 
-class CombinedConfig(PretrainedConfig, Generic[PC,HC]):
+class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
 
     model_type = "ArchIt (not recognised by AutoModel)"
 
@@ -253,12 +283,11 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC]):
             else:
                 raise AttributeError(item)
 
+    def _fields_to_dict(self):
+        return PretrainedConfig.to_dict(self)  # same as super().to_dict() but with a specific super() because two of the parents have a to_dict().
+
     def to_dict(self) -> dict:
-        d = super().to_dict()
-        for k in list(d.keys()):
-            if isinstance(d[k], HeadConfig):
-                d[k] = d[k].__dict__  # If HeadConfig ever stores objects, replace this .__dict__ by a method .to_dict() that can manage the nesting.
-        return d
+        return RecursiveSerialisable.to_dict(self)
 
     @classmethod
     def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> Tuple[dict, dict]:
@@ -286,7 +315,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         """
         super().__init__(combined_config)
         self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
-        self.supports_gradient_checkpointing = model.core.supports_gradient_checkpointing
+        self.supports_gradient_checkpointing = model.base_model.supports_gradient_checkpointing
 
         self.model: BaseModel[PC] = model
         self.head: Head[HC]       = head
@@ -312,7 +341,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         return super().__call__(*args, **kwargs)
 
     @abstractmethod
-    def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
+    def computeLoss(self, logits: OneOrMoreTensors, labels: OneOrMoreTensors) -> FloatTensor:
         pass
 
     #########################
@@ -382,7 +411,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         )
 
     @classmethod
-    def _load_pretrained_model(cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
+    def _load_pretrained_model(cls, empty_model_with_head: "ModelWithHead", state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
         """
         Indirection to trick PyTorch into recognising the base model in a checkpoint during .from_pretrained() on this class.
 
@@ -440,12 +469,12 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         Now you get a perfect picture of which weights are actually taken from the checkpoint to load into your model.
         """
         if set(state_dict.keys()) != {"model", "head"}:  # You've loaded a HF checkpoint.
-            consume_prefix_in_state_dict_if_present(state_dict, model.model.core.base_model_prefix + ".")  # In-place.
+            consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.
             loaded_keys = list(state_dict.keys())
 
-        return super()._load_pretrained_model(model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs)
+        return super()._load_pretrained_model(empty_model_with_head, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs)
 
-    base_model_prefix = "model.core"
+    base_model_prefix = "model._core"
 
     def __getattr__(self, item):
         """

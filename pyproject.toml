@@ -24,7 +24,9 @@ classifiers = [
 
 dependencies = [
     "torch",
-    "transformers >= 4.39.3"
+    "transformers >= 4.39.3",
+
+    "supar @ git+https://github.com/yzhangcs/parser"
 ]
 
 [project.optional-dependencies]

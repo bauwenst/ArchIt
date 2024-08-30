@@ -9,11 +9,13 @@ TODO:  You would then probably want a detection in LaMoTO that recognises when i
        you want 10 labels, but you want to take the weights from only the base model of a HuggingFace checkpoint of the
        same task except with 2 labels, we're going to ignore the head config by default.
 """
+import torch
 from torch import Tensor, FloatTensor
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss
 
 from .abstracts import *
-from .abstracts import PC
+from .abstracts import PC, OneOrMoreTensors, Tensors, ModelWithHeadOutput
+from .basemodels import BaseModelExtended
 from .heads import *
 
 
@@ -160,3 +162,39 @@ class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
         return self.loss_function(logits.view(-1, self.config.base_model_config.vocab_size), labels.view(-1))
+
+
+class ForDependencyParsing(ModelWithHead[PC,DependencyParsingHeadConfig]):
+    """
+    For the task of dependency parsing, based on Supar.
+
+    Implementation note: BaseModelExtended
+    """
+
+    base_model_prefix = "model.nested._core"
+
+    def __init__(self, combined_config: CombinedConfig[PC,DependencyParsingHeadConfig], model: BaseModel[PC], head: Head[DependencyParsingHeadConfig], loss: _Loss):
+        super().__init__(combined_config, BaseModelExtended(model, combined_config.head_config.extended_model_config), head, loss)
+
+    @classmethod
+    @property
+    def head_class(cls):
+        return DependencyParsingHead
+
+    @classmethod
+    def buildLoss(cls) -> _Loss:
+        return CrossEntropyLoss()
+
+    def computeLoss(self, logits: Tensors, labels: Tensors) -> FloatTensor:
+        arc_scores, rel_scores = logits
+        arc_labels, rel_labels = labels
+
+        device = arc_scores.device
+        mask = torch.ones((arc_labels.size(0), arc_labels.size(1)), dtype=torch.bool, device=device)  # You can simply initialise the mask to a full-1 matrix, since the data preprocessor already put a -100 on all padding and special tokens.
+        mask = mask & arc_labels.ge(0)
+
+        # Mask and send to device.
+        arc_scores, rel_scores = arc_scores[mask], rel_scores[mask]
+        arc_labels, rel_labels = arc_labels[mask].to(device), rel_labels[mask].to(device)
+        rel_scores = rel_scores[torch.arange(len(arc_labels)), arc_labels]
+        return self.loss_function(arc_scores, arc_labels) + self.loss_function(rel_scores, rel_labels)
