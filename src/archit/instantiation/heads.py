@@ -12,7 +12,7 @@ __all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
            "MaskedLMHead", "MaskedLMHeadConfig",
            "CausalLMHead", "CausalLMHeadConfig",
            "ExtractiveQAHead", "ExtractiveQAHeadConfig",
-           "DependencyParsingHead", "DependencyParsingHeadConfig"]
+           "DependencyParsingHead", "DependencyParsingHeadConfig", "BaseModelExtendedConfig"]
 
 
 @dataclass
@@ -23,9 +23,10 @@ class TokenClassificationHeadConfig(HeadConfig):
 class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: TokenClassificationHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense   = nn.Linear(base_config.hidden_size, head_config.num_labels)
+        self.post_init()
 
     def forward(
         self,
@@ -47,6 +48,10 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
     def hfEquivalentSuffix(cls) -> str:
         return "ForTokenClassification"
 
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: TokenClassificationHeadConfig):
+        assert head_config.num_labels > 0
+
 
 @dataclass
 class SequenceClassificationHeadConfig(HeadConfig):
@@ -59,12 +64,13 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
     """
 
     def __init__(self, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense1  = nn.Linear(base_config.hidden_size, base_config.hidden_size)
         self.dense2  = nn.Linear(base_config.hidden_size, head_config.num_labels)
 
         self.pooler = MeanPooler()
+        self.post_init()
 
     def forward(
         self,
@@ -95,6 +101,10 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
     def hfEquivalentSuffix(cls) -> str:
         return "ForTokenClassification"
 
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
+        assert head_config.num_labels > 0
+
 
 @dataclass
 class MaskedLMHeadConfig(HeadConfig):
@@ -104,10 +114,11 @@ class MaskedLMHeadConfig(HeadConfig):
 class MaskedLMHead(Head[MaskedLMHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dense1     = nn.Linear(base_config.hidden_size, base_config.hidden_size)
         self.layer_norm = nn.LayerNorm(base_config.hidden_size, eps=1e-5)
         self.dense2     = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=True)
+        self.post_init()
 
     def forward(
         self,
@@ -131,6 +142,10 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
     def hfEquivalentSuffix(cls) -> str:
         return "ForMaskedLM"
 
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
+        pass
+
 
 @dataclass
 class CausalLMHeadConfig(HeadConfig):
@@ -140,8 +155,9 @@ class CausalLMHeadConfig(HeadConfig):
 class CausalLMHead(Head[CausalLMHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dense = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=False)
+        self.post_init()
 
     def forward(
         self,
@@ -160,6 +176,10 @@ class CausalLMHead(Head[CausalLMHeadConfig]):
     def hfEquivalentSuffix(cls) -> str:
         return "ForCausalLM"
 
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
+        pass
+
 
 @dataclass
 class ExtractiveQAHeadConfig(HeadConfig):
@@ -169,8 +189,9 @@ class ExtractiveQAHeadConfig(HeadConfig):
 class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dense = nn.Linear(base_config.hidden_size, 2)
+        self.post_init()
 
     def forward(
         self,
@@ -188,6 +209,10 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForQuestionAnswering"
+
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: ExtractiveQAHeadConfig):
+        pass
 
 
 from dataclasses import dataclass
@@ -209,7 +234,7 @@ class DependencyParsingHeadConfig(HeadConfig):
 class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: DependencyParsingHeadConfig):
-        super().__init__()
+        super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
 
         self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
@@ -219,6 +244,7 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
 
         self.arc_attn = snn.Biaffine(n_in=head_config.final_hidden_size_arcs, scale=head_config.standardisation_exponent, bias_x=True, bias_y=False)
         self.rel_attn = snn.Biaffine(n_in=head_config.final_hidden_size_relations, n_out=head_config.num_labels, bias_x=True, bias_y=True)
+        self.post_init()
 
     def forward(
         self,
@@ -242,6 +268,10 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
     @property
     def config_class(cls):
         return DependencyParsingHeadConfig
+
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: DependencyParsingHeadConfig):
+        assert head_config.num_labels > 0
 
 
 class MeanPooler:

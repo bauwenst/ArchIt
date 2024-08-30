@@ -158,9 +158,9 @@ class Head(Module, Generic[HC], ABC):
     spit out a tensor as output.
     """
 
-    def __init__(self):
+    def __init__(self, base_config: BaseModelConfig, head_config: HC):
         super().__init__()
-        self.post_init()
+        self.assertConfigConstraints(base_config, head_config)
 
     def post_init(self):
         self.apply(self._init_weights)  # Recursively applies the given function to all child Modules and then self.
@@ -194,12 +194,16 @@ class Head(Module, Generic[HC], ABC):
     def fromConfigs(cls, base_config: BaseModelConfig, head_config: HC) -> Self:
         """
         When the developer overrides a method and changes the signature, he gets a warning. This is not the case for
-        constructors. Hence, we use this wrapper to force subclasses to have the same constructor arguments.
-
-        This class has no constructor because we don't actually care about storing these configs inside the head.
-        ModelWithHead already stores them anyway.
+        constructors. The only warning users get is when they don't call super().__init__(), but then constructors for
+        different heads could still have *additional* arguments and we don't want that.
+        Hence, we use this wrapper to force subclasses to be instantiable with no more than the base class's arguments.
         """
         return cls(base_config, head_config)
+
+    @classmethod
+    @abstractmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: HC):
+        pass
 
     @classmethod
     @property
