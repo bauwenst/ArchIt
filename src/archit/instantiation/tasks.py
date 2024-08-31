@@ -168,7 +168,9 @@ class ForDependencyParsing(ModelWithHead[PC,DependencyParsingHeadConfig]):
     """
     For the task of dependency parsing, based on Supar.
 
-    Implementation note: BaseModelExtended
+    Note that Supar's BiaffineDependencyModel represents a model-with-head, but has an unworkable interface:
+        1. The head is defined inside a subclass of the base model. The super constructor makes a guaranteed call to AutoModel.
+        2. The forward() method returns logits and no loss. It has a separate method for loss which is called by its users, which is not how you do that.
     """
 
     base_model_prefix = "model.nested._core"
@@ -190,8 +192,8 @@ class ForDependencyParsing(ModelWithHead[PC,DependencyParsingHeadConfig]):
         arc_labels, rel_labels = labels
 
         device = arc_scores.device
-        mask = torch.ones((arc_labels.size(0), arc_labels.size(1)), dtype=torch.bool, device=device)  # You can simply initialise the mask to a full-1 matrix, since the data preprocessor already put a -100 on all padding and special tokens.
-        mask = mask & arc_labels.ge(0)
+        mask = torch.ones((arc_labels.size(0), arc_labels.size(1)), dtype=torch.bool, device=device)  # You can simply initialise the mask to a full-1 matrix, since the data preprocessor already put a -100 on all padding and special tokens. In Supar, the mask is supplied, and modified to explicitly mask out the first token of each sentence (mask[:, 0] = 0), probably because they're assuming "[BoS] tokens [EoS]" format, i.e. only two special tokens, where the EoS is a dummy for the tree root's head. Your data collator should handle special tokens when it constructs the labels already!
+        mask = mask & arc_labels.ge(0)  # From this line onward, the implementation is identical to Supar's BiaffineModel.loss() method with partial=True.
 
         # Mask and send to device.
         arc_scores, rel_scores = arc_scores[mask], rel_scores[mask]

@@ -101,7 +101,7 @@ class GPT2BaseModel(BaseModel[GPT2Config]):
 from dataclasses import dataclass
 import torch
 from transformers import PreTrainedModel
-from supar import modules as snn
+from supar import modules as snn  # Note: You must install supar from GitHub. The pip version is more than 2 years out of date! https://github.com/yzhangcs/parser
 from supar.utils.fn import pad
 
 from .abstracts import RecursiveSerialisable

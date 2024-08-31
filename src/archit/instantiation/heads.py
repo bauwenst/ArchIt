@@ -17,7 +17,7 @@ __all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
 
 @dataclass
 class TokenClassificationHeadConfig(HeadConfig):
-    num_labels: int
+    num_labels: int=0
 
 
 class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
@@ -55,7 +55,7 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
 
 @dataclass
 class SequenceClassificationHeadConfig(HeadConfig):
-    num_labels: int
+    num_labels: int=0
 
 
 class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
