@@ -147,6 +147,8 @@ class BaseModelExtended(BaseModel):
         self.hidden_size    = base_config.hidden_size
         self.context_length = base_config.context_length
         self.pad_index      = base_model.base_model.config.pad_token_id
+        if self.pad_index is None:
+            raise ValueError("Failed to find pad_token_id in the base model's config.")
 
     @property
     def base_model(self) -> PreTrainedModel:

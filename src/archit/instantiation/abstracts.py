@@ -104,6 +104,10 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     ##### CLASS METHODS #####
     #########################
 
+    @classmethod
+    def from_config(cls, config: Union["CombinedConfig",PC]) -> Self:
+        return cls(config.base_model_config) if isinstance(config, CombinedConfig) else cls(config)
+
     @classmethod  # So you can call it on the class. Must come before @abstractmethod and @property.  https://stackoverflow.com/a/53417582/9352077
     @property  # So you can call it without parentheses
     @abstractmethod  # This should force an implementation, but the @property causes ABC to allow the method to be left unimplemented in subclasses... Seems like a bug to me. Anyway, ABC does raise a compile-time error with this `raise` in the body, somehow! https://stackoverflow.com/a/74534218/9352077
@@ -262,8 +266,10 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
             if isinstance(base_model_config, dict):
                 base_model_config = base_model_config_class(**base_model_config)
 
-        if isinstance(head_config, dict):
+        if isinstance(head_config, dict):  # Deserialise head. Its class has to be known for this.
             head_config = head_config_class(**head_config)
+        else:  # Head is already deserialised. We can impute its class.
+            head_config_class = head_config.__class__
 
         assert isinstance(base_model_config, base_model_config_class)
         assert isinstance(head_config, head_config_class)
@@ -274,10 +280,6 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
         """
         This is used as the fallback when self.item does not exist.
         We try to get it from the raw PretrainedConfig of the base model which is likely what the user meant.
-
-        There is a place somewhere in Huggingface where deepcopy() is called on the config, which tries to invoke
-        hasattr() (equivalent of .__getattr__()) and .__setattr__(). To prevent a stack overflow (0xC00000FD), we first
-        check whether a method with __...__ is asked for, which we don't handle ourselves.
         """
         try:
             return super().__getattr__(item)  # The old implementation. Will find methods and fields if they exist.
@@ -288,7 +290,10 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
                 raise AttributeError(item)
 
     def _fields_to_dict(self):
-        return PretrainedConfig.to_dict(self)  # same as super().to_dict() but with a specific super() because two of the parents have a to_dict().
+        fields_as_dict = PretrainedConfig.to_dict(self)  # same as super().to_dict() but with a specific super() because two of the parents have a to_dict().
+
+        fields_to_keep = ["base_model_config", "head_config", "torch_dtype", "transformers_version"]
+        return {k:v for k,v in fields_as_dict.items() if k in fields_to_keep}  # Pop the gigantic amount of shit we didn't ask for.
 
     def to_dict(self) -> dict:
         return RecursiveSerialisable.to_dict(self)
