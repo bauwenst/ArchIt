@@ -93,8 +93,8 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     def base_model(self) -> PreTrainedModel:
         """
         Returns a reference to the raw HuggingFace model beneath this BaseModel.
-        Slightly confusing naming; originally it was called ".hf" but then you had .hf and .base_model both being suggested
-        and that makes the interface cluttered.
+        Originally this method was called ".hf" but then you had .hf and .base_model both being suggested
+        and that makes the interface cluttered. So now we have BaseModel.base_model... oh well.
 
         self._core is not always instantiated, that's why you shouldn't refer to it as a user.
         """
@@ -265,6 +265,8 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
             assert head_config is not None, "Unpacked a CombinedConfig but it was missing a head config without missing a base model config... That's impossible."
             if isinstance(base_model_config, dict):
                 base_model_config = base_model_config_class(**base_model_config)
+            else:
+                base_model_config_class = base_model_config.__class__
 
         if isinstance(head_config, dict):  # Deserialise head. Its class has to be known for this.
             head_config = head_config_class(**head_config)
@@ -348,6 +350,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
 
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
         return super().__call__(*args, **kwargs)
+
+    @property
+    def base_model(self) -> PreTrainedModel:
+        return self.model.base_model
 
     @abstractmethod
     def computeLoss(self, logits: OneOrMoreTensors, labels: OneOrMoreTensors) -> FloatTensor:
