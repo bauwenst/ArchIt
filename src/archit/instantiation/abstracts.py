@@ -311,6 +311,9 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
 
         return json_dict, remaining_kwargs
 
+    def _get_non_default_generation_parameters(self) -> dict:  # Needed to avoid triggering this bug (which will be fixed in transformers after October 2024): https://github.com/huggingface/transformers/pull/33934
+        return dict()
+
 
 class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     """
