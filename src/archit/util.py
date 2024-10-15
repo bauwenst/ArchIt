@@ -1,4 +1,6 @@
+from typing import Tuple
 from torch.nn import Module
+from transformers import PreTrainedModel
 
 
 def torchPrint(module: Module, scaffolding: str=":", truncation_depth: int=100):
@@ -20,3 +22,21 @@ def torchPrint(module: Module, scaffolding: str=":", truncation_depth: int=100):
             too_deep = False
 
     print("\n".join(lines_kept).replace(default_indent, scaffolding + "   "))
+
+
+def parameterCount(model: Module) -> Tuple[int,int]:
+    trainable = 0
+    total     = 0
+    for p in model.parameters():
+        n = p.numel()  # num(ber) el(ements)
+        total += n
+        if p.requires_grad:
+            trainable += n
+
+    return trainable, total
+
+
+def parameterCountBaseVsHead(model: PreTrainedModel) -> Tuple[Tuple[int,int], Tuple[int,int]]:
+    base_trainable, base_total = parameterCount(model.base_model)
+    all_trainable, all_total   = parameterCount(model)
+    return (base_trainable, base_total), (all_trainable - base_trainable, all_total - base_total)
