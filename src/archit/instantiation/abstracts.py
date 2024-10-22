@@ -392,7 +392,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         return cls(
             CombinedConfig(base_model_config=base_model.config, head_config=head_config),
             base_model,
-            cls.buildHead(base_model.standardiseConfig(base_model.config), head_config),
+            cls.buildHead(base_model.__class__.standardiseConfig(base_model.config), head_config),
             cls.buildLoss()
         )
 

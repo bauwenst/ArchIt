@@ -143,7 +143,7 @@ class BaseModelExtended(BaseModel):
         self.pooling_method = extended_config.word_pooling
         self.stride         = extended_config.stride
 
-        base_config = base_model.standardiseConfig(base_model.config)
+        base_config = base_model.__class__.standardiseConfig(base_model.config)
         self.hidden_size    = base_config.hidden_size
         self.context_length = base_config.context_length
         self.pad_index      = base_model.base_model.config.pad_token_id
@@ -218,12 +218,34 @@ class BaseModelExtended(BaseModel):
     @classmethod
     @property
     def config_class(cls):
-        return None
+        return None  # Explicitly set to None. This property is only accessed by .from_pretrained, which uses a user-requested
 
     @classmethod
-    def standardiseConfig(cls, raw_config):
-        return None
+    def standardiseConfig(cls, raw_config):  # FIXME
+        raise RuntimeError("Known issue: standardiseConfig should not be a classmethod. It is only called on instances. By being a classmethod, BaseModelExtended doesn't know which class is contained by its self.nested field at runtime because classes have no access to instance fields.")
 
     @classmethod
     def buildCore(cls, raw_config):
-        return None
+        return None  # Explicitly set to None. We want self._core to be None because self.nested._core isn't.
+
+    @property
+    def _supports_sdpa(self) -> bool:
+        """
+        In newer versions of Transformers, model code explicitly supports multiple implementations for attention. One is
+        "eager" attention built with several calls to PyTorch in Python, the other uses PyTorch's new native "sdpa".
+        The implementation is chosen with the config field "attn_implementation". If it is None (which is the case
+        in all model configs pre-September 2024, and for newer models there is no requirement to set it so it defaults
+        to None), then when you call model_class.from_pretrained(), the method _autoset_attn_implementation() checks
+        whether the _supports_sdpa field is True in the model class. If yes, and PyTorch has SDPA, then "sdpa" is set
+        in the config.
+
+        By default, _supports_sdpa is always False. In ArchIt, when the BaseModel's core has _supports_sdpa True (like
+        with a RoBERTa core), it is not actually an issue because the config is FIRST used to instantiate the BaseModel
+        (attn_implementation None + _supports_sdpa False => no conflict and no change) and THEN the core
+        (attn_implementation None + _supports_sdpa True => no conflict and attn_implementation changed to "sdpa"). However,
+        if the config is used for a third time to construct an ArchIt model (e.g. a BaseModelExtended which copies the
+        BaseModel's config), then you have attn_implementation "sdpa" + _supports_sdpa False => conflict.
+
+        This can be solved by having BaseModelExtended affirm that it _supports_sdpa when its core does.
+        """
+        return self.base_model._supports_sdpa
