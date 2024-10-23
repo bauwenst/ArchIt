@@ -1,4 +1,5 @@
 # TODO
+- `BaseModelExtended` should not be a `BaseModel`. It should be a `ModelWithHead`.
 - Test if you can save_pretrained and load_pretrained a `ModelWithHead` subclass. I think saving is possible but loading may run into a FIXME we have left.
 - Test if the following can happen: 
   - Save an ArchIt ForToken model.

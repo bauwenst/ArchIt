@@ -103,13 +103,21 @@ import torch
 from transformers import PreTrainedModel
 from supar import modules as snn  # Note: You must install supar from GitHub. The pip version is more than 2 years out of date! https://github.com/yzhangcs/parser
 from supar.utils.fn import pad
+from enum import Enum
 
 from .abstracts import RecursiveSerialisable
+
+
+class SubwordPooling(str, Enum):  # https://aclanthology.org/2021.eacl-main.194.pdf
+    FIRST = 1
+    LAST  = 2
+    MEAN  = 3
+
 
 @dataclass
 class BaseModelExtendedConfig(RecursiveSerialisable):
     layer_pooling: int=1      # Embedding pooling per token across the last N layers (weighted sum with learnt softmax weights).
-    word_pooling: str="mean"  # Embedding pooling per word across its tokens.
+    word_pooling: SubwordPooling = SubwordPooling.MEAN  # Embedding pooling per word across its tokens.
     stride: int=256           # Tokens to shift the context window when the input is too long.
 
 
@@ -199,11 +207,11 @@ class BaseModelExtended(BaseModel):
         # -> B x W x S x H
 
         # So far, everything has been in terms of subwords. We now pool the subword dimension to get word embeddings.
-        if self.pooling_method == 'first':
+        if self.pooling_method == SubwordPooling.FIRST:
             x = x[:, :, 0]
-        elif self.pooling_method == 'last':
+        elif self.pooling_method == SubwordPooling.LAST:
             x = x.gather(2, (tokens_per_word-1).unsqueeze(-1).repeat(1, 1, self.hidden_size).unsqueeze(2)).squeeze(2)
-        elif self.pooling_method == 'mean':
+        elif self.pooling_method == SubwordPooling.MEAN:
             x = x.sum(2) / tokens_per_word.unsqueeze(-1)
         elif self.pooling_method:
             raise RuntimeError(f'Unsupported pooling method "{self.pooling_method}"!')
