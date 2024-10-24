@@ -1,5 +1,9 @@
 """
-Abstract classes needed to wrap HuggingFace models and put a head on top, while supporting a .from_pretrained() method.
+The three abstract classes needed to wrap HuggingFace models and put a head on top, while supporting a .from_pretrained() method:
+    - BaseModel adapts every HuggingFace model to a general interface.
+    - Head turns embeddings into logits.
+    - ModelWithHead first runs a BaseModel and then runs a Head.
+
 Two design choices that I will highlight:
     - All methods that have to do with constructing instances of the class (e.g. dealing with configs) are ALL
       tagged with @classmethod. This is because instances have to be constructible within .from_pretrained(), which is
@@ -15,14 +19,6 @@ Two design choices that I will highlight:
       that method's body is to change the type hint when you override the method, but then it was useless to have the
       variable type hint first! All this to say: you should know when and when not to expect generic types to help with
       autocompletion, and if you need to override a variable signature with a type invocation, you're doing it wrong.
-
-TODO:
-    - Can you initialise the base model from a base model checkpoint, INSIDE a ModelWithHead.from_pretrained()?
-        > What we can currently do is either accept a ModelWithHead checkpoint or accept a BaseModel checkpoint BUT only
-          read the config. We can't read the weights for the latter.
-        - We have at least one way to do it, which is to override .from_pretrained() and just call BaseModel.from_pretrained()
-          inside. (May require having the model stored in the same field of BaseModel every time so we can reassign it.)
-          The problem is of course that we want to support ModelWithHead.from_pretrained() from an ACTUAL ModelWithHead checkpoint too!
 """
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
@@ -41,28 +37,12 @@ Tensors = Tuple[Tensor, ...]
 OneOrMoreTensors = Union[Tensor, Tensors]
 HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors, see e.g. the dependency parsing head.
 
+from .configs import *
+from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
+
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
 
-@dataclass
-class BaseModelConfig:
-    """
-    Unbelievably, HuggingFace's PretrainedConfig, the parent class for all config classes, does NOT provide
-    a universal interface to get basic model properties like amount of layers, hidden size and so on.
-    Instead, it says in its documentation that those properties "are common" in all subclasses. I don't play that way.
-    """
-    # Will be relevant for heads to inspect:
-    hidden_size: int
-    hidden_dropout_prob: float
-    vocab_size: int
-
-    # Will not be relevant, but should still be available on base model configs:
-    num_hidden_layers: int
-    num_attention_heads: int
-    context_length: int
-
-
-PC = TypeVar("PC", bound=PretrainedConfig)
 class BaseModel(PreTrainedModel, Generic[PC], ABC):
     """
     Adapter around HuggingFace transformer encoders to have the same input-output signature.
@@ -135,27 +115,6 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         pass
 
 
-class RecursiveSerialisable(ABC):
-    """
-    Small class that implements a recursive to_dict() method on top of __dict__.
-    """
-
-    def _fields_to_dict(self):
-        return self.__dict__
-
-    def to_dict(self) -> dict:
-        d = self._fields_to_dict()
-        for k in list(d.keys()):
-            try:
-                d[k] = d[k].to_dict()  # If d[k] has the method, it must be executed.
-            except:
-                pass  # If d[k] does not have the method, it is assumed to be immediately serialisable. No .__dict__ is called on it either.
-        return d
-
-class HeadConfig(RecursiveSerialisable):
-    pass
-
-HC = TypeVar("HC", bound=HeadConfig)
 class Head(Module, Generic[HC], ABC):
     """
     Adapter around implementations (or just implementations themselves) of heads that take BMOWPACA as input and
@@ -236,85 +195,6 @@ class ModelWithHeadOutput(ModelOutput):
     loss: Optional[Tensor]=None
 
 
-class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
-
-    model_type = "ArchIt (not recognised by AutoModel)"
-
-    def __init__(self, base_model_config: Union[dict,PC]=None, head_config: Union[dict,HC]=None,
-                 base_model_config_class: Type[PC]=None, head_config_class: Type[HC]=None, **kwargs):
-        """
-        This is where all the ugly config hardcoding happens thanks to HuggingFace being fake and gay. I hope to repent
-        for the sin of polluting this overall beautiful OOP code with this class.
-
-        Note: because HuggingFace's Config.from_pretrained() calls the constructor with only **kwargs and with dictionaries
-        rather than objects as values, you need the default 'None' and you need to support dictionary values too.
-
-        Also, because you can't (and shouldn't) deduce from the config which config classes were used, this class has
-        to be informed about them. For the PretrainedModel.from_pretrained() call, those will all be in **kwargs,
-        but the **kwargs in this constructor don't include them because we mention them explicitly in the signature.
-        """
-        super().__init__(**kwargs)
-        self.is_composition = True  # HuggingFace's way of saying "run serialisation on the fields to serialise me" nested configs.
-
-        # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than a CombinedConfig.
-        if base_model_config is None:
-            if head_config is None:
-                raise ValueError("When you unpack a PretrainedConfig and give the result to the constructor of a CombinedConfig, you should also supply a HeadConfig as an extra argument.")
-            base_model_config = base_model_config_class(**kwargs)
-        else:
-            assert head_config is not None, "Unpacked a CombinedConfig but it was missing a head config without missing a base model config... That's impossible."
-            if isinstance(base_model_config, dict):
-                base_model_config = base_model_config_class(**base_model_config)
-            else:
-                base_model_config_class = base_model_config.__class__
-
-        if isinstance(head_config, dict):  # Deserialise head. Its class has to be known for this.
-            head_config = head_config_class(**head_config)
-        else:  # Head is already deserialised. We can impute its class.
-            head_config_class = head_config.__class__
-
-        assert isinstance(base_model_config, base_model_config_class)
-        assert isinstance(head_config, head_config_class)
-        self.base_model_config = base_model_config
-        self.head_config       = head_config
-
-    def __getattr__(self, item):
-        """
-        This is used as the fallback when self.item does not exist.
-        We try to get it from the raw PretrainedConfig of the base model which is likely what the user meant.
-        """
-        try:
-            return super().__getattr__(item)  # The old implementation. Will find methods and fields if they exist.
-        except AttributeError:
-            if "base_model_config" in self.__dict__:
-                return getattr(self.base_model_config, item)  # If the field self.base_model_config doesn't exist, you call this same __getattr__ method recursively, hence the "if" around it.
-            else:
-                raise AttributeError(item)
-
-    def _fields_to_dict(self):
-        fields_as_dict = PretrainedConfig.to_dict(self)  # same as super().to_dict() but with a specific super() because two of the parents have a to_dict().
-
-        fields_to_keep = ["base_model_config", "head_config", "torch_dtype", "transformers_version"]
-        return {k:v for k,v in fields_as_dict.items() if k in fields_to_keep}  # Pop the gigantic amount of shit we didn't ask for.
-
-    def to_dict(self) -> dict:
-        return RecursiveSerialisable.to_dict(self)
-
-    @classmethod
-    def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> Tuple[dict, dict]:
-        json_dict, remaining_kwargs = super().get_config_dict(pretrained_model_name_or_path, **kwargs)
-
-        kwargs_to_add_to_dict = ["head_config", "base_model_config_class", "head_config_class"]
-        for key in kwargs_to_add_to_dict:
-            if key in remaining_kwargs:
-                json_dict[key] = remaining_kwargs.pop(key)
-
-        return json_dict, remaining_kwargs
-
-    def _get_non_default_generation_parameters(self) -> dict:  # Needed to avoid triggering this bug (which will be fixed in transformers after October 2024): https://github.com/huggingface/transformers/pull/33934
-        return dict()
-
-
 class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     """
     Although this class treats BaseModel and Head as two equals, it should be noted that when you defined a model task
@@ -331,6 +211,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
         self.supports_gradient_checkpointing = model.base_model.supports_gradient_checkpointing
 
+        # Note: when you change the names of these fields, also change the strings in _load_pretrained_model().
         self.model: BaseModel[PC] = model
         self.head: Head[HC]       = head
         self.loss_function = loss
@@ -343,7 +224,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         output_hidden_states: bool=False,  # False by default because otherwise the output will be tuple-ified into (logits, hidden_states) rather than just the logits, and this breaks metrics relying on EvalPrediction objects.
         **kwargs
     ) -> ModelWithHeadOutput:
-        base_output = self.model(input_ids, attention_mask, **kwargs)
+        base_output = self.callBaseModel(input_ids, attention_mask, do_drop_intermediates=not output_hidden_states, **kwargs)
         logits      = self.head(base_output, attention_mask, **kwargs)
         return ModelWithHeadOutput(
             logits=logits,
@@ -353,6 +234,15 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
 
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
         return super().__call__(*args, **kwargs)
+
+    def callBaseModel(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        do_drop_intermediates: bool,
+        **kwargs
+    ) -> AllHiddenStatesAndPooling:
+        return self.model(input_ids, attention_mask, do_drop_intermediates=do_drop_intermediates, **kwargs)
 
     @property
     def base_model(self) -> PreTrainedModel:
@@ -397,7 +287,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         )
 
     @classmethod
-    def from_pretrained(cls, checkpoint: str, base_model_class: Type[BaseModel], head_config: HC=None) -> "ModelWithHead[PC,HC]":  # Can't use Self here because it is trumped by the strange return type of the call inside the function.
+    def from_pretrained(cls, checkpoint: str, base_model_class: Type[BaseModel[PC]], head_config: HC=None) -> "ModelWithHead[PC,HC]":  # Can't use Self here because it is trumped by the strange return type of the call inside the function.
         """
         Load the model from an existing checkpoint. Distinguishes between two cases:
             - The given checkpoint is of the correct model-with-head. In that case, no head config is needed.
@@ -432,61 +322,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     def _load_pretrained_model(cls, empty_model_with_head: "ModelWithHead", state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
         """
         Indirection to trick PyTorch into recognising the base model in a checkpoint during .from_pretrained() on this class.
-
-        Here's the background (I should turn this into a blog post):
-        - When a PyTorch Module hierarchy is saved (resulting in a "state dictionary" with signature
-          something like Dict[str, Module]), every Module is identified by a dot-separated sequence of fields to traverse
-          to get to it.
-
-        - In HuggingFace, you have headless models and models with heads. A headless model's top-level modules are its
-          immediate components like embeddings and an encoder and so on. A model with head also has top-level modules,
-          among which one very special top-level module that is a headless model, stored in a field that is named as the
-          "prefix" of that headless model: for example, the prefix for RoBERTa is "roberta", which means that a model with head
-          like RobertaForMaskedLM must at least have a field named "roberta". Indeed, it has two fields in this case:
-          [roberta: RobertaModel, lm_head: RobertaLMHead].
-          On the other hand, RobertaModel has no field "roberta" because it is the base model.
-
-        - The assumption is that you only ever call .from_pretrained() between models that have the same prefix. The
-          4 possible variations of this situation are supported by looking for the prefix and removing it where needed,
-          and then assuming all module identifiers are an exact match.
-
-        Now, what we want to do, however, is load from a [roberta, lm_head] model into a [wrapper, head] where we want
-        the roberta field to land in the nested field wrapper.core. This is impossible by trimming off one string from
-        none, one, or both of these, because finding the headless model's weights requires trimming the "roberta" prefix
-        from all identifiers in the state dict, yet we want them to be matched to the fields you get by trimming "wrapper.core"
-        from our skeleton.
-
-        So, what this method does is optionally trim the "roberta" prefix from the state dict. We then pretend that
-        "wrapper.model" has always been the prefix that indicates a model with head. Because [roberta, lm_head] doesn't have it,
-        it must be a base model. Same for an actual base model which also doesn't have it. Meanwhile, our skeleton always
-        has it, so it must be a model-with-head, and HuggingFace will automatically deal with it.
-
-        Note that you can't actually "trim off" a prefix from the identifiers *of the skeleton*, because unlike the
-        loaded checkpoint, it is not a dictionary, but an object. Normally this is done by calling modelwithhead."prefix"
-        and loading the headless model's components into that reference instead. This is an extra problem for us because our
-        headless model components live in a field of a field of the model with head. This is why this class also implements
-        __getattr__ to support dot-containing field names.
-
-        HuggingFace is actually tricked by these: it uses string operations to figure out that there should be no missing
-        fields and reports this success, yet meanwhile it won't find the dot-containing field and not load the weights
-        into the model. To actually know the load succeeded, go into modeling_utils.py to the definition of load(), and
-        replace the line that defines "args" by:
-        ```
-            print("Checking prefix:", prefix)
-            missing = []
-            unexpected = []
-            args = (state_dict, prefix, local_metadata, True, missing, unexpected, error_msgs)
-        ```
-        Then in the non-DeepSpeed branch below that, replace the call to module._load_from_state_dict(*args) by:
-        ```
-            print("\tCandidates:", [key for key in state_dict if key.startswith(prefix) and "." not in key[len(prefix):]])
-            module._load_from_state_dict(*args)
-            print("\tMissing:", missing)
-            print("\tUnexpected:", unexpected)
-        ```
-        Now you get a perfect picture of which weights are actually taken from the checkpoint to load into your model.
+        To understand how this works, see https://bauwenst.github.io/posts/explainers/2024-08-31-How-from_pretrained-works/.
         """
-        if set(state_dict.keys()) != {"model", "head"}:  # You've loaded a HF checkpoint.
+        loaded_keys = set(state_dict.keys())
+        if any(key not in loaded_keys   for key in {"model", "head"}):  # => You've loaded a HF checkpoint.
             state_dict = {k:v for k,v in state_dict.items() if not k.startswith("head.")}  # If there is a head in the checkpoint that is literally named "head", it will cause a "state dict is corrupted" error since it looks like the head of ModelWithHead. The reason: when HF thinks you load from a base model checkpoint into a base-with-head model, it checks if any of the checkpoint keys (which should be base model fields) are not in the base model but are in the head. That means your checkpoint is not a base model after all and hence counts as corruption.
             consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.
             loaded_keys = list(state_dict.keys())

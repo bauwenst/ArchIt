@@ -4,8 +4,9 @@ from typing import Tuple
 import torch
 from torch import nn, Tensor
 
-from .abstracts import Head, HeadConfig, BaseModelConfig, AllHiddenStatesAndPooling
-from .basemodels import BaseModelExtendedConfig
+from .abstracts import Head, HeadConfig
+from .basemodels import BaseModelConfig, AllHiddenStatesAndPooling
+from .extensions import BaseModelExtendedConfig
 
 __all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
            "SequenceClassificationHead", "SequenceClassificationHeadConfig",
