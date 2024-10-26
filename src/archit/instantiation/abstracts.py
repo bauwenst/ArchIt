@@ -33,12 +33,14 @@ from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
+
 Tensors = Tuple[Tensor, ...]
 OneOrMoreTensors = Union[Tensor, Tensors]
 HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors, see e.g. the dependency parsing head.
 
 from .configs import *
 from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
+from .mixins import StatefulLossMixin, LossState
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
@@ -55,6 +57,9 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         super().__init__(config)
         self.config: PC = self.config  # Type annotation for the existing field self.config. The annotation is not updated automatically if you just type-hint this class's constructor argument, because self.config gets its type from the signature of the super constructor. The alternative to a generic is that you repeat this expression here for each separate config.
         self._core = self.buildCore(config)  # Private field because users should refer to .hf to access the HuggingFace model.
+
+        self._accumulated_loss = LossState()  # Accumulates loss generated inside the core.
+        self.activateCoreLoss()
 
     @abstractmethod
     def forward(
@@ -79,6 +84,20 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         self._core is not always instantiated, that's why you shouldn't refer to it as a user.
         """
         return self._core
+
+    def activateCoreLoss(self):
+        """
+        To prevent the core from accumulating any loss (which only happens if any of its modules is a StatefulLossMixin)
+        and therefore prevent the core from adding anything to the downstream loss, override this method with an empty body.
+        """
+        def r(module: Module):
+            if isinstance(module, StatefulLossMixin):
+                module.registerLoss(self._accumulated_loss)
+        self.base_model.apply(r)
+
+    def computeLoss(self) -> Tensor:
+        """DO NOT override this method. It is necessary to free the memory used for accumulating core loss if applicable."""
+        return self._accumulated_loss.compute()
 
     #########################
     ##### CLASS METHODS #####
@@ -229,7 +248,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         return ModelWithHeadOutput(
             logits=logits,
             base_model_output=base_output if output_hidden_states else None,
-            loss=self.computeLoss(logits, labels) if labels is not None else None
+            loss=self.model.computeLoss() + self.computeLoss(logits, labels)   if labels is not None else   self.model.computeLoss()
         )
 
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
