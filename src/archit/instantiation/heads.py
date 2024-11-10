@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Tuple
 
 import torch
@@ -6,19 +6,25 @@ from torch import nn, Tensor
 
 from .abstracts import Head, HeadConfig
 from .basemodels import BaseModelConfig, AllHiddenStatesAndPooling
-from .extensions import BaseModelExtendedConfig
+from .extensions import PoolingAndStridingConfig, flattenNestedBatches
 
 __all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
-           "SequenceClassificationHead", "SequenceClassificationHeadConfig",
+           "SequenceClassificationHead", "SequenceClassificationHeadConfig", "SequenceClassificationHeadForNestedBatches",
            "MaskedLMHead", "MaskedLMHeadConfig",
            "CausalLMHead", "CausalLMHeadConfig",
            "ExtractiveQAHead", "ExtractiveQAHeadConfig",
-           "DependencyParsingHead", "DependencyParsingHeadConfig", "BaseModelExtendedConfig"]
+           "DependencyParsingHead", "DependencyParsingHeadConfig", "PoolingAndStridingConfig"]
 
 
 @dataclass
-class TokenClassificationHeadConfig(HeadConfig):
-    num_labels: int=0
+class HeadConfigWithLabels(HeadConfig):
+    """Your IDE might complain about extensions of this class, but due to the kw_only flag, it's all legal."""
+    num_labels: int = field(default=0, kw_only=True)  # It has a default so that users don't have to specify this (tasks automate it).
+
+
+@dataclass
+class TokenClassificationHeadConfig(HeadConfigWithLabels):
+    pass
 
 
 class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
@@ -55,8 +61,8 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
 
 
 @dataclass
-class SequenceClassificationHeadConfig(HeadConfig):
-    num_labels: int=0
+class SequenceClassificationHeadConfig(HeadConfigWithLabels):
+    pass
 
 
 class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
@@ -100,11 +106,38 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
-        return "ForTokenClassification"
+        return "ForSequenceClassification"
 
     @classmethod
     def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
         assert head_config.num_labels > 0
+
+
+class SequenceClassificationHeadForNestedBatches(SequenceClassificationHead):
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,
+        **kwargs
+    ) -> Tensor:
+        # Flatten encoder output
+        B1, B2, L, H = encoder_output.last_hidden_state.shape
+        flat_encoder_output, attention_mask = flattenNestedBatches(encoder_output, attention_mask)
+
+        # Pooled output B*C x H -> B*C x K  (possibly after B*C x L x H -> B*C x H)
+        logits = super().forward(
+            encoder_output=flat_encoder_output,
+            attention_mask=attention_mask,
+            **kwargs
+        )
+
+        # Unflatten B*C x K -> B x C x K
+        return logits.view(B1, B2, -1)
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "/"  # ForMultipleChoice uses a linear+dropout head, not a sequence classification head.
 
 
 @dataclass
@@ -216,20 +249,14 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
         pass
 
 
-from dataclasses import dataclass
-from supar import modules as snn
-
-
 @dataclass
-class DependencyParsingHeadConfig(HeadConfig):
-    extended_model_config: BaseModelExtendedConfig
+class DependencyParsingHeadConfig(HeadConfigWithLabels):  # If your IDE complains about this line, update your IDE :)
+    extended_model_config: PoolingAndStridingConfig
 
     final_hidden_size_arcs: int=500
     final_hidden_size_relations: int=100
     head_dropout: float=0.33  # Dropout after the model and dropout inside the head.
     standardisation_exponent: int=0  # The scores of the biaffine part of the head can be scaled by 1/hidden_size^e with e some exponent. For some reason it must be an int.
-
-    num_labels: int=0
 
 
 class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
@@ -238,6 +265,7 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
 
+        from supar import modules as snn
         self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.arc_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.rel_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)

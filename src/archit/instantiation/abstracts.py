@@ -235,6 +235,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self.head: Head[HC]       = head
         self.loss_function = loss
 
+        assert isinstance(head, self.__class__.head_class)
+
     def forward(
         self,
         input_ids: Tensor,
@@ -283,7 +285,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     @classmethod
     @property
     @abstractmethod  # As always, not working right now.
-    def head_class(cls) -> Type[Head[HC]]:  # Because all heads have the same constructor method .fromConfigs(), all you need to .buildHead() is to know the class to call it on.
+    def head_class(cls) -> Type[Head[HC]]:  # Because all Head classes have the same constructor method .fromConfigs(), all you need to .buildHead() is to know the class to call it on.
         pass
 
     @classmethod
@@ -355,7 +357,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
 
     def __getattr__(self, item):
         """
-        See _load_pretrained_model() for explanation of this method.
+        __getattr__ except it supports fields that have a "." in them, i.e. nested fields.
+        Necessary to support the prefix consumption of _load_pretrained_model().
         """
         if "." not in item:  # As if we never overrode it.
             return super().__getattr__(item)

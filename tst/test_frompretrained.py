@@ -49,11 +49,11 @@ def test_robertafordp():
     Can you load the DP architecture?
     """
     from archit.instantiation.basemodels import RobertaBaseModel
-    from archit.instantiation.heads import DependencyParsingHeadConfig, BaseModelExtendedConfig
+    from archit.instantiation.heads import DependencyParsingHeadConfig, PoolingAndStridingConfig
     from archit.instantiation.tasks import ForDependencyParsing
 
     model_with_head = ForDependencyParsing.from_pretrained("roberta-base", RobertaBaseModel, DependencyParsingHeadConfig(
-        extended_model_config=BaseModelExtendedConfig()
+        extended_model_config=PoolingAndStridingConfig()
     ))
     torchPrint(model_with_head)
     print(model_with_head.model.base_model.embeddings.word_embeddings.weight)

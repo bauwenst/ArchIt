@@ -1,7 +1,7 @@
 # Design notes
 ## Abstracts
 ### BaseModel
-#### Why is BaseModelExtended not a BaseModel?
+#### Why is ForTokensGroupedByWord not a BaseModel?
 - Has been documented in its docstring.
 
 ## Mixins
@@ -9,6 +9,10 @@
 #### Why not have the BaseModel's extra loss terms be delivered via the BaseModelOutput?
 - This would require the loss terms to be known at the *end* of BaseModel's inference, i.e. in its final module, and hence
   every single module and its output would have to be altered.
+
+#### Why not use `HfMultitaskTrainer`'s `report_metrics()` method?
+- The loss term would appear in WandB, which you may not want. 
+- Also, you would have to know the loss term in the log's dictionary.
 
 #### Why ask the model developer to extend a class mixin rather than adding a method (and base class) post-hoc like HfMultitaskTrainer?
 - The developer either way has to change their model code.
