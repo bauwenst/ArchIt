@@ -1,6 +1,11 @@
-from typing import Tuple
+from typing import Tuple, Dict
+from pathlib import Path
+from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedModel
+
+from transformers.utils import cached_file, WEIGHTS_NAME
+from transformers.modeling_utils import load_state_dict
 
 
 def torchPrint(module: Module, scaffolding: str=":", truncation_depth: int=100):
@@ -40,3 +45,22 @@ def parameterCountBaseVsHead(model: PreTrainedModel) -> Tuple[Tuple[int,int], Tu
     base_trainable, base_total = parameterCount(model.base_model)
     all_trainable, all_total   = parameterCount(model)
     return (base_trainable, base_total), (all_trainable - base_trainable, all_total - base_total)
+
+
+def checkpointToStateDict(checkpoint: str) -> Dict[str,Tensor]:
+    """
+    Very reduced version of the path resolution logic that happens inside
+    transformers.modeling_utils.PreTrainedModel.from_pretrained.
+    """
+    if Path(checkpoint).is_dir():  # Local
+        path = Path(checkpoint) / WEIGHTS_NAME
+        if not path.is_file():
+            raise RuntimeError(f"No file {WEIGHTS_NAME} in checkpoint folder {checkpoint}.")
+        checkpoint = path.as_posix()
+    else:  # Remote
+        try:
+            checkpoint = cached_file(path_or_repo_id=checkpoint, filename=WEIGHTS_NAME)
+        except:
+            raise RuntimeError(f"Could not find checkpoint {checkpoint}.")
+
+    return load_state_dict(checkpoint)
