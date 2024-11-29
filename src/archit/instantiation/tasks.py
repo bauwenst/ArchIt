@@ -1,13 +1,13 @@
 """
 Links (1) which head belongs to which task and (2) which loss belongs to which task and how it is computed from logits and labels.
 """
+from typing import Tuple
 import torch
 from torch import Tensor, FloatTensor
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss
 
 from .configs import PC
 from .abstracts import *
-from .abstracts import Tensors
 from .extensions import ForTokensGroupedByWord, ForNestedBatches
 from .heads import *
 
@@ -97,28 +97,117 @@ class ForExtractiveQA(ModelWithHead[PC,ExtractiveQAHeadConfig]):
         return CrossEntropyLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
+        labels = labels.to(logits.device)
+
+        # Disentangle QA-start and QA-end logits. Squeeze and (for some reason) make contiguous.
         start_logits, end_logits = logits.split(1, dim=-1)  # "split the last dimension into groups of 1"
         start_logits = start_logits.squeeze(-1).contiguous()
-        end_logits   = end_logits.squeeze(-1).contiguous()
+        end_logits   = end_logits  .squeeze(-1).contiguous()
 
-        labels = labels.to(logits.device)
-        start_positions, end_positions = labels.split(1, dim=-1)
-
-        # If we are on multi-GPU, split add a dimension.
-        if len(start_positions.size()) > 1:
+        # Disentangle QA-start and QA-end labels. Squeeze when needed. No contiguous needed apparently.
+        start_positions, end_positions = labels.split(1, dim=-1)  # B' x 2  ->  B' x 1 and B' x 1
+        if len(start_positions.size()) > 1:  # # If we are on multi-GPU, split add a dimension.
             start_positions = start_positions.squeeze(-1)
         if len(end_positions.size()) > 1:
             end_positions = end_positions.squeeze(-1)
 
-        # Sometimes the start/end positions are outside our model inputs, we ignore these terms.
-        ignored_index = start_logits.size(1)
-        start_positions = start_positions.clamp(0, ignored_index)
-        end_positions   = end_positions.clamp(0, ignored_index)
+        # Sometimes the start/end positions are outside the input length; we truncate those back to the final index of the input.
+        L = start_logits.size(1)
+        start_positions = start_positions.clamp(0, L)
+        end_positions   = end_positions  .clamp(0, L)
 
-        self.loss_function.ignore_index = ignored_index
+        # Get loss as average of start and end loss
+        self.loss_function.ignore_index = L
         start_loss = self.loss_function(start_logits, start_positions)
         end_loss   = self.loss_function(end_logits, end_positions)
         return (start_loss + end_loss) / 2
+
+
+class ForExtractiveAQA(ModelWithHead[PC,ExtractiveAQAHeadConfig]):
+    """
+    Architecture for the task of predicting whether a given question can be answered given a context,
+    and if so, which span of the context contains the answer.
+    """
+
+    def __init__(self, combined_config: CombinedConfig[PC,ExtractiveAQAHeadConfig], model: BaseModel[PC], head: Head[ExtractiveAQAHeadConfig], loss: _Loss):
+        super().__init__(combined_config=combined_config, model=model, head=head, loss=loss)
+        self.λ = combined_config.head_config.ua_loss_weight
+
+    @classmethod
+    @property
+    def head_class(cls):
+        return ExtractiveAQAHead
+
+    @classmethod
+    def buildLoss(cls) -> _Loss:
+        return CrossEntropyLoss()
+
+    def computeLoss(self, logits: Tuple[Tensor,Tensor], labels: Tuple[Tensor,Tensor]) -> FloatTensor:
+        # The head always produces both QA and unanswerability (UA) logits for all examples, but:
+        #   - The thresholded prediction of whether each example is answerable according to the model has NO influence
+        #     on the outcome of this method. Downstream code may want to prevent doing QA for examples that are predicted
+        #     to be UA, but that prediction has no power here.
+        #   - The hard UA labels are used for UA loss AND are used to decide which QA logits are counted towards QA loss.
+
+        # Disentangle QA and UA
+        qa_logits, ua_logits = logits  # qa_logits is B x L x 2 (equivalent of B x L and B x L) where the last dimension has a logit for a token being the start and the end, each separately normalised across L. ua_logits is B x 2, normalised across that 2.
+        qa_labels, ua_labels = labels  # qa_labels is B x 2 (equivalent of B x 1 and B x 1). ua_labels is B x 1.
+
+        # Send to device
+        qa_labels, ua_labels = qa_labels.to(qa_logits.device), ua_labels.to(ua_logits.device)
+
+        # Mask out QA logits and labels for examples that are unanswerable. This is only worth it when you're going to have QA loss.
+        # Note that the same type of masking will likely be done during evaluation, but then based on thresholded predictions. This
+        # never happens in this method because this method computes loss for the heads and it makes no sense to punish the QA heads
+        # with an arbitrarily high loss on examples we know they can't handle.
+        if ua_labels is not None and qa_labels is not None:
+            mask = torch.where(ua_labels)  # True when answerable. Say there are B' <= B of these.
+            qa_logits = qa_logits[mask]
+            qa_labels = qa_labels[mask]
+
+        # Now, like QA: disentangle QA-start and QA-end logits, squeeze and (for some reason) make contiguous.
+        start_logits, end_logits = qa_logits.split(1, dim=-1)  # B' x L x 2  ->  B' x L and B' x L.
+        start_logits = start_logits.squeeze(-1).contiguous()
+        end_logits   = end_logits  .squeeze(-1).contiguous()
+
+        # 1. QA loss
+        qa_loss = None
+        if qa_labels is not None:
+            # Disentangle QA-start and QA-end labels. Squeeze when needed. No contiguous needed apparently.
+            start_positions, end_positions = qa_labels.split(1, dim=-1)  # B' x 2  ->  B' x 1 and B' x 1
+            if len(start_positions.size()) > 1:
+                start_positions = start_positions.squeeze(-1)
+            if len(end_positions.size()) > 1:
+                end_positions = end_positions.squeeze(-1)
+
+            # Sometimes the start/end positions are outside the input length; we truncate those back to the final index of the input.
+            L = start_logits.size(1)
+            start_positions = start_positions.clamp(0, L)
+            end_positions   = end_positions  .clamp(0, L)
+
+            # Get loss as average of start and end loss
+            self.loss_function.ignore_index = L
+            start_loss = self.loss_function(start_logits, start_positions)
+            end_loss   = self.loss_function(end_logits, end_positions)
+            qa_loss = (start_loss + end_loss)/2
+            self.loss_function.ignore_index = -100
+
+        # 2. UA loss
+        ua_loss = None
+        if ua_labels is not None:
+            ua_loss = self.loss_function(ua_logits.view(-1, 2), ua_labels.long().view(-1))
+
+        # 3. Compose the losses.
+        if qa_loss is not None and ua_loss is not None:
+            total_loss = qa_loss + self.λ*ua_loss
+        elif qa_loss is not None:
+            total_loss = qa_loss
+        elif ua_loss is not None:
+            total_loss = ua_loss  # No weight since it is the only term.
+        else:
+            total_loss = None
+
+        return total_loss
 
 
 class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHeadConfig]):
@@ -224,7 +313,7 @@ class ForDependencyParsing(ForTokensGroupedByWord[PC, DependencyParsingHeadConfi
     def buildLoss(cls) -> _Loss:
         return CrossEntropyLoss()
 
-    def computeLoss(self, logits: Tensors, labels: Tensors) -> FloatTensor:
+    def computeLoss(self, logits: Tuple[Tensor,Tensor], labels: Tuple[Tensor,Tensor]) -> FloatTensor:
         arc_scores, rel_scores = logits
         arc_labels, rel_labels = labels
 

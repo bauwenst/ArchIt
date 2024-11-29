@@ -208,10 +208,10 @@ class Head(Module, Generic[HC], ABC):
 
 
 @dataclass
-class ModelWithHeadOutput(ModelOutput):
-    logits: OneOrMoreTensors
-    base_model_output: Optional[AllHiddenStatesAndPooling]=None  # Has to be optional because of some stupid rule in ModelOutput.__post_init__()
-    loss: Optional[Tensor]=None
+class ModelWithHeadOutput(ModelOutput):  # The convention in HF is that loss is always the 1st element and logits the 2nd.
+    loss: Optional[Tensor] = None
+    logits: OneOrMoreTensors = None  # Must be None due to some stupid rule in ModelOutput.__post_init__(), even though it never actually is None.
+    base_model_output: Optional[AllHiddenStatesAndPooling] = None
 
 
 class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
@@ -241,7 +241,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self,
         input_ids: Tensor,
         attention_mask: Tensor,
-        labels: Optional[Tensor]=None,
+        labels: Optional[OneOrMoreTensors]=None,  # To have a uniform interface across tasks (unlike what HF offers), we don't have separate arguments for separate labels, but rather a potential tuple of labels.
         output_hidden_states: bool=False,  # False by default because otherwise the output will be tuple-ified into (logits, hidden_states) rather than just the logits, and this breaks metrics relying on EvalPrediction objects.
         **kwargs
     ) -> ModelWithHeadOutput:

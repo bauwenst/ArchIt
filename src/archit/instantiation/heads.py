@@ -4,7 +4,7 @@ from typing import Tuple
 import torch
 from torch import nn, Tensor
 
-from .abstracts import Head, HeadConfig
+from .abstracts import Head, HeadConfig, Tensors
 from .basemodels import BaseModelConfig, AllHiddenStatesAndPooling
 from .extensions import PoolingAndStridingConfig, flattenNestedBatches
 
@@ -13,6 +13,7 @@ __all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
            "MaskedLMHead", "MaskedLMHeadConfig",
            "CausalLMHead", "CausalLMHeadConfig",
            "ExtractiveQAHead", "ExtractiveQAHeadConfig",
+           "ExtractiveAQAHead", "ExtractiveAQAHeadConfig",
            "DependencyParsingHead", "DependencyParsingHeadConfig", "PoolingAndStridingConfig"]
 
 
@@ -222,7 +223,7 @@ class ExtractiveQAHeadConfig(HeadConfig):
 
 class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
 
-    def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
+    def __init__(self, base_config: BaseModelConfig, head_config: ExtractiveQAHeadConfig):
         super().__init__(base_config, head_config)
         self.dense = nn.Linear(base_config.hidden_size, 2)
         self.post_init()
@@ -246,6 +247,41 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
 
     @classmethod
     def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: ExtractiveQAHeadConfig):
+        pass
+
+
+@dataclass
+class ExtractiveAQAHeadConfig(HeadConfig):
+   ua_loss_weight: float
+
+
+class ExtractiveAQAHead(Head[ExtractiveAQAHeadConfig]):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: ExtractiveAQAHeadConfig):
+        super().__init__(base_config, head_config)
+        self.qa_heads = nn.Linear(base_config.hidden_size, 2)  # Two linear heads but they're stored as one.
+        self.ua_head  = SequenceClassificationHead(base_config, SequenceClassificationHeadConfig(num_labels=2))
+        self.post_init()
+
+    def forward(
+        self,
+        encoder_output: AllHiddenStatesAndPooling,
+        attention_mask: Tensor,
+        **kwargs
+    ) -> Tuple[Tensor,Tensor]:  # (QA logits, UA logits)
+        return self.qa_heads(encoder_output.last_hidden_state), self.ua_head(encoder_output.last_hidden_state, attention_mask)
+
+    @classmethod
+    @property
+    def config_class(cls):
+        return ExtractiveAQAHeadConfig
+
+    @classmethod
+    def hfEquivalentSuffix(cls) -> str:
+        return "/"
+
+    @classmethod
+    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: ExtractiveAQAHeadConfig):
         pass
 
 

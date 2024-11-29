@@ -1,4 +1,9 @@
 # TODO
+- There is one very large technical debt that will require some redesign: we have linked *tasks* and *head architectures*,
+  both in ArchIt and in LaMoTO, but this is not necessary at all. Sequence classification heads have an (implicit) *interface*
+  they need to adhere to, but there are infinitely many `SequenceClassificationHead`s that can exist. We should really name
+  heads after their architecture, like a `Pool_MLP_MLP_Head`, and then clearly, a task is not parameterised by a config for
+  that head specifically. 
 - Test if you can save_pretrained and load_pretrained a `ModelWithHead` subclass. I think saving is possible but loading may run into a FIXME we have left.
 - Test if the following can happen: 
   - Save an ArchIt ForToken model.
