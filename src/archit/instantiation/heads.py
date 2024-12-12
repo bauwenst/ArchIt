@@ -260,7 +260,7 @@ class ExtractiveAQAHead(Head[ExtractiveAQAHeadConfig]):
     def __init__(self, base_config: BaseModelConfig, head_config: ExtractiveAQAHeadConfig):
         super().__init__(base_config, head_config)
         self.qa_heads = nn.Linear(base_config.hidden_size, 2)  # Two linear heads but they're stored as one.
-        self.ua_head  = SequenceClassificationHead(base_config, SequenceClassificationHeadConfig(num_labels=2))
+        self.ua_head  = SequenceClassificationHead(base_config, SequenceClassificationHeadConfig(num_labels=2))  # Binary classifier.
         self.post_init()
 
     def forward(

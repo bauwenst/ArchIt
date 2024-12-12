@@ -233,7 +233,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         # Note: when you change the names of these fields, also change the strings in _load_pretrained_model().
         self.model: BaseModel[PC] = model
         self.head: Head[HC]       = head
-        self.loss_function = loss
+        self._loss_function = loss
 
         assert isinstance(head, self.__class__.head_class)
 
@@ -268,6 +268,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     @property
     def base_model(self) -> PreTrainedModel:
         return self.model.base_model
+
+    @property
+    def loss_function(self) -> _Loss:  # Need to override this property because Les Incompétents always find a way to mess up their design.  https://github.com/huggingface/transformers/pull/34191#issuecomment-2539200643
+        return self._loss_function
 
     @abstractmethod
     def computeLoss(self, logits: OneOrMoreTensors, labels: OneOrMoreTensors) -> FloatTensor:
