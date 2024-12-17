@@ -4,6 +4,7 @@ Links (1) which head belongs to which task and (2) which loss belongs to which t
 from typing import Tuple
 import torch
 from torch import Tensor, FloatTensor
+from torch import nn
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss
 
 from .configs import PC
@@ -275,6 +276,14 @@ class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
         shifted_labels = labels[:, 1:].contiguous()
         return self.loss_function(shifted_logits.view(-1, self.config.base_model_config.vocab_size), shifted_labels.view(-1))
 
+    def get_output_embeddings(self) -> nn.Linear:
+        assert isinstance(self.head, CausalLMHead)
+        return self.head.dense
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear):
+        assert isinstance(self.head, CausalLMHead)
+        self.head.dense = new_embeddings
+
 
 class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
 
@@ -290,6 +299,21 @@ class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
         return self.loss_function(logits.view(-1, self.config.base_model_config.vocab_size), labels.view(-1))
+
+    def get_output_embeddings(self) -> nn.Linear:
+        """
+        Used for finding the Linear module whose .weight to tie. No need for a _tie_weights() method because reassigning
+        .weight is all you need to do and this is handled by modeling_utils.
+        """
+        assert isinstance(self.head, MaskedLMHead)
+        return self.head.dense2
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear):
+        """
+        Used when there is no weight tying, but you resize the embedding matrix.
+        """
+        assert isinstance(self.head, MaskedLMHead)
+        self.head.dense2 = new_embeddings
 
 
 class ForDependencyParsing(ForTokensGroupedByWord[PC, DependencyParsingHeadConfig]):

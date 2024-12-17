@@ -147,12 +147,18 @@ class MaskedLMHeadConfig(HeadConfig):
 
 
 class MaskedLMHead(Head[MaskedLMHeadConfig]):
+    """
+    Based on RoBERTa's LM head.
+
+    Note: weight tying is enabled in the class that contains the head and the base model, not the head.
+          Hence, no method implementations are dedicated to it here.
+    """
 
     def __init__(self, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
         super().__init__(base_config, head_config)
         self.dense1     = nn.Linear(base_config.hidden_size, base_config.hidden_size)
         self.layer_norm = nn.LayerNorm(base_config.hidden_size, eps=1e-5)
-        self.dense2     = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=True)
+        self.dense2     = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=True)  # Note about weight tying: weight tying is only applied to the .weight field of this Linear. I don't really see why you would need a separate .bias field in this head, despite BERT and RoBERTa and DeBERTa having them. (DeBERTa sets bias=False, then makes a .bias and then sets the Linear's bias to that...)
         self.post_init()
 
     def forward(
@@ -191,7 +197,7 @@ class CausalLMHead(Head[CausalLMHeadConfig]):
 
     def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
         super().__init__(base_config, head_config)
-        self.dense = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=False)
+        self.dense = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=False)  # GPT, LLaMA, Gemma ... all lack a bias prior, unlike most MLMs. Don't know why.
         self.post_init()
 
     def forward(
