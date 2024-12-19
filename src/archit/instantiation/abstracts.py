@@ -41,6 +41,7 @@ HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors,
 from .configs import *
 from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
 from .mixins import StatefulLossMixin, LossState
+from ..util import dataclass_from_dict
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
@@ -323,17 +324,27 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         instance. Usually, that constructor only takes a config and explicitly defines the PyTorch module tree.
         Because a ModelWithHead doesn't know which base model will be used beforehand, it doesn't have a pre-determined
         module tree and cannot just be constructed with a config alone. (Not even by saving the class name in the config,
-        because we don't have a mapping between the names and locations of custom classes.)
+        because we don't have a mapping between the names and file paths of custom classes.)
 
-        .from_pretrained() passes through *args and **kwargs to the constructor, which we can use to inform it. This
-        method's responsibility is to create those *args and **kwargs.
+        In short: the goal is to construct all the objects needed for the ModelWithHead constructor (except for the
+        CombinedConfig, since from_pretrained helps us to construct that): a base model, a head, and a loss function.
+        The weights in each of these will be set in the super() call.
+        The way we communicate those constructor arguments is that .from_pretrained() passes any *args and **kwargs
+        through itself to the constructor. This method's responsibility is to create those *args and **kwargs.
         """
-        base_model_config = base_model_class.config_class.from_pretrained(checkpoint)  # FIXME: If the given checkpoint is for a model-with-head, this does not work because the model config is nested one level deep.
-        base_model_shell = base_model_class(base_model_config)  # A mix between .from_config (which only exists on auto classes and expects a config from the user) and .from_pretrained (just to get the config so the user doesn't have to supply it).
+        # 1. Get the config needed to get the base model. (Note: similar work will be done again later in CombinedConfig.from_pretrained() when the checkpoint is unpacked a second time. It is what it is.)
+        base_model_config, _ = PretrainedConfig.get_config_dict(checkpoint)  # Basically a static method of PretrainedConfig, not a class-specific method, used to read a JSON.
+        if "base_model_config" in base_model_config:  # In this case: (1) the base model's config lives one level deeper, and (2) the head config can be imputed.
+            head_config       = head_config or dataclass_from_dict(cls.head_class.config_class, base_model_config["head_config"])
+            base_model_config = base_model_config["base_model_config"]
+
+        base_model_config = base_model_class.config_class.from_dict(base_model_config)
+
+        # 2. Instantiate the base model with that config, instantiate the head with that and the head config, and the loss.
         return super().from_pretrained(
             checkpoint,
             # Unnamed arguments (*args) passed to PretrainedModel.from_pretrained() are passed straight to the constructor of this class, except the checkpoint is replaced by a config.
-            base_model_shell,
+            base_model_class(base_model_config),  # A mix between .from_config (which only exists on auto classes and expects a config from the user) and .from_pretrained (just to get the config so the user doesn't have to supply it).
             cls.buildHead(base_model_class.standardiseConfig(base_model_config), head_config),
             cls.buildLoss(),
 
@@ -350,7 +361,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         To understand how this works, see https://bauwenst.github.io/posts/explainers/2024-08-31-How-from_pretrained-works/.
         """
         loaded_keys = set(state_dict.keys())
-        if any(key not in loaded_keys   for key in {"model", "head"}):  # => You've loaded a HF checkpoint.
+        if any(all(not key.startswith(prefix) for prefix in {"model", "head"}) for key in loaded_keys):  # => You've loaded a HF checkpoint.
+            print("Loading HuggingFace checkpoint into ArchIt model.")
             state_dict = {k:v for k,v in state_dict.items() if not k.startswith("head.")}  # If there is a head in the checkpoint that is literally named "head", it will cause a "state dict is corrupted" error since it looks like the head of ModelWithHead. The reason: when HF thinks you load from a base model checkpoint into a base-with-head model, it checks if any of the checkpoint keys (which should be base model fields) are not in the base model but are in the head. That means your checkpoint is not a base model after all and hence counts as corruption.
             consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.
             loaded_keys = list(state_dict.keys())

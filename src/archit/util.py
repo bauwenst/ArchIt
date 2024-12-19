@@ -1,9 +1,11 @@
 from typing import Tuple, Dict
+from enum import Enum
 from pathlib import Path
 from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedModel
 
+from dataclasses import fields
 from transformers.utils import cached_file, WEIGHTS_NAME
 from transformers.modeling_utils import load_state_dict
 
@@ -64,3 +66,33 @@ def checkpointToStateDict(checkpoint: str) -> Dict[str,Tensor]:
             raise RuntimeError(f"Could not find checkpoint {checkpoint}.")
 
     return load_state_dict(checkpoint)
+
+
+def dataclass_from_dict(cls: type, as_dict: dict):
+    """
+    Based on https://stackoverflow.com/a/68395388/9352077
+    """
+    # Base case: raise TypeError when cls is not a dataclass type.
+    field_objects = fields(cls)
+
+    # Recursive case
+    field_types_lookup = {field.name: field.type for field in field_objects}
+    kwargs = {}
+    for field_name, value in as_dict.items():
+        try:
+            expected_type = field_types_lookup[field_name]
+        except KeyError:
+            # Key in the source is not a field of the class. Keep this excess value in the kwargs; it won't end up as a field, though.
+            kwargs[field_name] = value
+            continue
+
+        try:
+            kwargs[field_name] = dataclass_from_dict(expected_type, value)
+        except TypeError:
+            # Not a dataclass. If the type is an enum, do still deserialise it.
+            if issubclass(expected_type, Enum):
+                kwargs[field_name] = expected_type(value)
+            else:
+                kwargs[field_name] = value
+
+    return cls(**kwargs)
