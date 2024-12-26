@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archit"
-version = "2024.11.01"
+version = "2025.01.01"
 description = "ArchIt: convert in-place modifications of PyTorch objects into class code."
 keywords = ["PyTorch", "machine learning"]
 
