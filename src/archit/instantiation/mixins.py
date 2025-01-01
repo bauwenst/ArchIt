@@ -8,46 +8,6 @@ from collections import defaultdict
 from transformers.training_args import TrainingArguments
 
 
-class LossState:
-    """
-    Used for storing an extra loss term by models that inherit from StatefulLossMixin.
-    """
-
-    def __init__(self):
-        self._tensor: Union[Tensor,int] = 0  # We set it to 0 rather than torch.zeros(1) since for the latter you need to know the device (CPU/GPU) even before adding anything yet.
-
-    def add(self, tensor: Tensor):
-        self._tensor += tensor
-
-    def compute(self) -> Union[Tensor,int]:
-        """Return the accumulated loss and reset it to 0."""
-        result = self._tensor
-        self._tensor = 0
-        return result
-
-
-class StatefulLossMixin:
-    """
-    Interface for modules that generate unsupervised loss term(s) somewhere in their implementation. (For example, a
-    regularisation term in one specific module.)
-
-    Adds two methods for two different users:
-        1. `registerLoss` to let an external user set a reference to an accumulator for the loss.
-           The canonical case is that this is ArchIt's BaseModel.
-        2. `addToLoss` for the module itself to call without it needing to do safety checks.
-    """
-
-    def __init__(self):
-        self._loss_state: Optional[LossState] = None
-
-    def registerLoss(self, loss_state: LossState):
-        self._loss_state = loss_state
-
-    def addToLoss(self, tensor: Tensor):
-        if self._loss_state is not None:
-            self._loss_state.add(tensor)
-
-
 SupportedLoggingValue = Union[int, float, Tensor, ndarray]
 
 class LoggingState:
@@ -140,3 +100,50 @@ class ReportDiagnosticsMixin:
     def report(self, diagnostics: Dict[str, SupportedLoggingValue]):
         if self._log is not None:
             self._log.appendLogs(diagnostics)
+
+
+class LossState:
+    """
+    Used for storing an extra loss term by models that inherit from StatefulLossMixin.
+    """
+
+    def __init__(self):
+        self._tensor: Union[Tensor,int] = 0  # We set it to 0 rather than torch.zeros(1) since for the latter you need to know the device (CPU/GPU) even before adding anything yet.
+
+    def add(self, tensor: Tensor):
+        self._tensor += tensor
+
+    def compute(self) -> Union[Tensor,int]:
+        """Return the accumulated loss and reset it to 0."""
+        result = self._tensor
+        self._tensor = 0
+        return result
+
+
+class StatefulLossMixin(ReportDiagnosticsMixin):
+    """
+    Interface for modules that generate unsupervised loss term(s) somewhere in their implementation. (For example, a
+    regularisation term in one specific module.)
+
+    Adds two methods for two different users:
+        1. `registerLoss` to let an external user set a reference to an accumulator for the loss.
+           The canonical case is that this is ArchIt's BaseModel.
+        2. `addToLoss` for the module itself to call without it needing to do safety checks.
+
+    This class also subclasses ReportDiagnosticsMixin so that if a reporter is connected, each (unscaled) loss term is
+    tracked in its own logging entry.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._loss_state: Optional[LossState] = None
+
+    def registerLoss(self, loss_state: LossState):
+        self._loss_state = loss_state
+
+    def addToLoss(self, report_as: str, tensor: Tensor, coefficient: float=1.0):
+        if self._loss_state is not None:
+            self._loss_state.add(coefficient*tensor)
+
+        assert report_as
+        self.report({report_as: tensor})
