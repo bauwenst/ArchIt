@@ -70,6 +70,7 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
         but the **kwargs in this constructor don't include them because we mention them explicitly in the signature.
         """
         super().__init__(**kwargs)
+        self.deleteTopLevelFields()
         self.is_composition = True  # HuggingFace's way of saying "run serialisation on the fields to serialise me" nested configs.
 
         # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than a CombinedConfig.
@@ -129,3 +130,13 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
 
     def _get_non_default_generation_parameters(self) -> dict:  # Needed to avoid triggering this bug (which will be fixed in transformers after October 2024): https://github.com/huggingface/transformers/pull/33934
         return dict()
+
+    def deleteTopLevelFields(self):
+        """
+        Unlink all top-level fields added by HuggingFace. I didn't ask for them. If you need a field, go look for it in
+        the subconfigs.
+        """
+        for k,v in list(self.__dict__.items()):
+            # if v is None:
+            if k not in {"_name_or_path", "transformers_version", "architectures"}:
+                delattr(self, k)
