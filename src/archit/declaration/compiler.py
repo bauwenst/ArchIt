@@ -116,7 +116,8 @@ class ModuleNode(Node):
     def renderClass(self) -> str:
         s = ""
         s += f"class {self.getClass().__name__}{SUFFIX}(nn.Module):\n\n"
-        s += "    def __init__(config):\n"
+        s += "    def __init__(self, config):\n"
+        s += "        super().__init__()\n"
         for name, child in self.children.items():
             s += f"        self.{name} = {child.renderInitialiser()}\n"
         s += "\n"
