@@ -62,6 +62,21 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         self._accumulated_loss = LossState()  # Accumulates loss generated inside the core.
         self.activateCoreLoss()
 
+    def __init_subclass__(cls, **kwargs):  # Also applies to grandchild classes.
+        """
+        Transformers used to expect model classes to declare a class field called 'config_class' to declare the type of
+        their config. It would only be accessed on .from_pretrained, so you could override it with an abstract property
+        to allow subclasses to declare it later on.
+
+        Nowadays, they have a different way of declaring the config class, BUT, they STILL store the result of this
+        declaration manually in cls.config_class whenever a subclass is created (including BaseModel). In doing so, they
+        retrieve the config_class class field if it still exists, so you can no longer leave it abstract.
+        You can leave it None, however, and no complaints will be made, so that's why we have no config_class field, and
+        set cls.config_class ourselves.
+        """
+        super().__init_subclass__(**kwargs)
+        cls.config_class: type[PC] = cls.configClass()  # This works even for subclasses that have not implemented this @abstractmethod yet. It just returns the None of the empty body.
+
     @abstractmethod
     def forward(
         self,
@@ -108,13 +123,11 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     def from_config(cls, config: Union["CombinedConfig",PC]) -> Self:
         return cls(config.base_model_config) if isinstance(config, CombinedConfig) else cls(config)
 
-    @classmethod  # So you can call it on the class. Must come before @abstractmethod and @property.  https://stackoverflow.com/a/53417582/9352077
-    @property  # So you can call it without parentheses
-    @abstractmethod  # This should force an implementation, but the @property causes ABC to allow the method to be left unimplemented in subclasses... Seems like a bug to me. Anyway, ABC does raise a compile-time error with this `raise` in the body, somehow! https://stackoverflow.com/a/74534218/9352077
-    def config_class(cls) -> Type[PC]:
-        """
-        Necessary so that when you call .from_pretrained() on this class, it knows how to parse the associated config.
-        """
+    # This used to have @property. But @property is evil, so we no longer have it.
+    @classmethod  # So you can call it on the class. Must come before @abstractmethod.  https://stackoverflow.com/a/53417582/9352077
+    @abstractmethod
+    def configClass(cls) -> Type[PC]:
+        """Necessary so that when you call .from_pretrained() on this class, it knows how to parse the associated config."""
         raise NotImplementedError
 
     @classmethod
@@ -189,9 +202,8 @@ class Head(Module, Generic[HC], ABC):
         pass
 
     @classmethod
-    @property
-    @abstractmethod  # Doesn't work due to the @property. Leaving it here so it will work one day.
-    def config_class(cls) -> Type[HC]:
+    @abstractmethod
+    def configClass(cls) -> Type[HC]:
         """
         Necessary so that when you call .from_pretrained() on a ModelWithHead class, it knows how to parse the associated config.
         """
@@ -222,6 +234,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     for them and ask for a config instead.
     """
 
+    config_class = CombinedConfig
+
     def __init__(self, combined_config: CombinedConfig[PC,HC], model: BaseModel[PC], head: Head[HC], loss: _Loss):
         """
         No user of this class should use the constructor, except the call to cls() inside .from_pretrained() (hence why
@@ -236,7 +250,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self.head: Head[HC]       = head
         self._loss_function = loss
 
-        assert isinstance(head, self.__class__.head_class)
+        assert isinstance(head, self.__class__.headClass())
 
     def forward(
         self,
@@ -282,20 +296,21 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ##### CLASS METHODS #####
     #########################
 
-    @classmethod
-    @property
-    def config_class(cls) -> Type[PretrainedConfig]:  # Because .from_pretrained() uses it.
-        return CombinedConfig
+    # Property-classmethods were deprecated in Python and the config_class method was deprecated in Transformers.
+    # @classmethod
+    # @property
+    # def config_class(cls) -> Type[PretrainedConfig]:  # Because .from_pretrained() uses it.
+    #     return CombinedConfig
 
+    # This obviously needs to be a class-level method or field (a property is not allowed), so we choose method to tag it as abstract.
     @classmethod
-    @property
-    @abstractmethod  # As always, not working right now.
-    def head_class(cls) -> Type[Head[HC]]:  # Because all Head classes have the same constructor method .fromConfigs(), all you need to .buildHead() is to know the class to call it on.
+    @abstractmethod
+    def headClass(cls) -> Type[Head[HC]]:  # Because all Head classes have the same constructor method .fromConfigs(), all you need to .buildHead() is to know the class to call it on.
         pass
 
     @classmethod
     def buildHead(cls, base_model_config: BaseModelConfig, head_config: HC) -> Head[HC]:
-        return cls.head_class.fromConfigs(base_model_config, head_config)
+        return cls.headClass().fromConfigs(base_model_config, head_config)
 
     @classmethod
     @abstractmethod
@@ -335,10 +350,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         # 1. Get the config needed to get the base model. (Note: similar work will be done again later in CombinedConfig.from_pretrained() when the checkpoint is unpacked a second time. It is what it is.)
         base_model_config, _ = PretrainedConfig.get_config_dict(checkpoint)  # Basically a static method of PretrainedConfig, not a class-specific method, used to read a JSON.
         if "base_model_config" in base_model_config:  # In this case: (1) the base model's config lives one level deeper, and (2) the head config can be imputed.
-            head_config       = head_config or dataclass_from_dict(cls.head_class.config_class, base_model_config["head_config"])
+            head_config       = head_config or dataclass_from_dict(cls.headClass().configClass(), base_model_config["head_config"])
             base_model_config = base_model_config["base_model_config"]
 
-        base_model_config = base_model_class.config_class.from_dict(base_model_config)
+        base_model_config = base_model_class.configClass().from_dict(base_model_config)
 
         # 2. Instantiate the base model with that config, instantiate the head with that and the head config, and the loss.
         return super().from_pretrained(
@@ -350,8 +365,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
 
             # Keyword arguments (**kwargs) are passed first to PretrainedConfig.from_pretrained() and only what remains ends up in PretrainedModel.from_pretrained(). Do note that PretrainedConfig.from_pretrained() does NOT pass these **kwargs to the constructor and only uses them for administrative stuff by default; I forcibly add them in get_config_dict().
             head_config=head_config,
-            base_model_config_class=base_model_class.config_class,
-            head_config_class=cls.head_class.config_class
+            base_model_config_class=base_model_class.configClass(),
+            head_config_class=cls.headClass().configClass()
         )
 
     @classmethod

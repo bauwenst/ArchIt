@@ -16,8 +16,7 @@ from .heads import *
 class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassificationHeadConfig]):
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return TokenClassificationHead
 
     @classmethod
@@ -35,8 +34,7 @@ class ForSingleLabelSequenceClassification(ModelWithHead[PC,SequenceClassificati
     """
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return SequenceClassificationHead
 
     @classmethod
@@ -54,8 +52,7 @@ class ForMultiLabelSequenceClassification(ModelWithHead[PC,SequenceClassificatio
     """
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return SequenceClassificationHead
 
     @classmethod
@@ -70,8 +67,7 @@ class ForMultiLabelSequenceClassification(ModelWithHead[PC,SequenceClassificatio
 class ForSequenceRegression(ModelWithHead[PC,SequenceClassificationHeadConfig]):
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return SequenceClassificationHead
 
     @classmethod
@@ -89,8 +85,7 @@ class ForSequenceRegression(ModelWithHead[PC,SequenceClassificationHeadConfig]):
 class ForExtractiveQA(ModelWithHead[PC,ExtractiveQAHeadConfig]):
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return ExtractiveQAHead
 
     @classmethod
@@ -135,8 +130,7 @@ class ForExtractiveAQA(ModelWithHead[PC,ExtractiveAQAHeadConfig]):
         self.λ = combined_config.head_config.ua_loss_weight
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return ExtractiveAQAHead
 
     @classmethod
@@ -239,8 +233,7 @@ class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHe
             raise NotImplementedError("Although multi-task multiple choice is technically possible, it isn't supported currently.")
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return SequenceClassificationHeadForNestedBatches
 
     @classmethod
@@ -260,8 +253,7 @@ class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHe
 class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return CausalLMHead
 
     @classmethod
@@ -288,8 +280,7 @@ class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
 class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return MaskedLMHead
 
     @classmethod
@@ -329,8 +320,7 @@ class ForDependencyParsing(ForTokensGroupedByWord[PC, DependencyParsingHeadConfi
         super().__init__(combined_config, combined_config.head_config.extended_model_config, model, head, loss)
 
     @classmethod
-    @property
-    def head_class(cls):
+    def headClass(cls):
         return DependencyParsingHead
 
     @classmethod

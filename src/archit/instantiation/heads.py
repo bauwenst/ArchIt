@@ -48,8 +48,7 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
         return x
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return TokenClassificationHeadConfig
 
     @classmethod
@@ -101,8 +100,7 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
         return x
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return SequenceClassificationHeadConfig
 
     @classmethod
@@ -175,8 +173,7 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
         return x
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return MaskedLMHeadConfig
 
     @classmethod
@@ -209,8 +206,7 @@ class CausalLMHead(Head[CausalLMHeadConfig]):
         return self.dense(encoder_output.last_hidden_state)
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return CausalLMHeadConfig
 
     @classmethod
@@ -243,8 +239,7 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
         return self.dense(encoder_output.last_hidden_state)
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return ExtractiveQAHeadConfig
 
     @classmethod
@@ -278,8 +273,7 @@ class ExtractiveAQAHead(Head[ExtractiveAQAHeadConfig]):
         return self.qa_heads(encoder_output.last_hidden_state), self.ua_head(encoder_output.last_hidden_state, attention_mask)
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return ExtractiveAQAHeadConfig
 
     @classmethod
@@ -336,8 +330,7 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
         return s_arc, s_rel
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return DependencyParsingHeadConfig
 
     @classmethod

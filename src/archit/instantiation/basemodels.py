@@ -46,8 +46,7 @@ class RobertaBaseModel(BaseModel[RobertaConfig]):
         )
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return RobertaConfig
 
 
@@ -92,8 +91,7 @@ class GPT2BaseModel(BaseModel[GPT2Config]):
         )
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return GPT2Config
 
 
@@ -122,8 +120,7 @@ class DebertaBaseModel(BaseModel[DebertaConfig]):
         )
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return DebertaConfig
 
     @classmethod
@@ -168,8 +165,7 @@ class CanineBaseModel(BaseModel[CanineConfig]):
         )
 
     @classmethod
-    @property
-    def config_class(cls):
+    def configClass(cls):
         return CanineConfig
 
     @classmethod

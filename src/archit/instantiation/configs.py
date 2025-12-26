@@ -19,7 +19,7 @@ class BaseModelConfig:
     """
     # Will be relevant for heads to inspect:
     hidden_size: int
-    hidden_dropout_prob: float
+    hidden_dropout_prob: float  # TODO: Should probably use the MLP dropout, but even better would be if the user had to specify a dropout for the head.
     vocab_size: int
 
     # Will not be relevant, but should still be available on base model configs:
@@ -71,7 +71,8 @@ class CombinedConfig(PretrainedConfig, Generic[PC,HC], RecursiveSerialisable):
         """
         super().__init__(**kwargs)
         self.deleteTopLevelFields()
-        self.is_composition = True  # HuggingFace's way of saying "run serialisation on the fields to serialise me" nested configs.
+        self.is_composition = True  # HuggingFace's way of saying "run serialisation on the fields when you serialise me" nested configs.
+        self.has_no_defaults_at_init = True  # Needed because otherwise the assertions below get triggered due to HF trying to re-instantiate the class without any constructor arguments.
 
         # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than a CombinedConfig.
         if base_model_config is None:
