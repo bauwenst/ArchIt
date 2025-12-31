@@ -376,7 +376,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         To understand how this works, see https://bauwenst.github.io/posts/explainers/2024-08-31-How-from_pretrained-works/.
         """
         loaded_keys = set(state_dict.keys())
-        if any(all(not key.startswith(prefix) for prefix in {"model", "head"}) for key in loaded_keys):  # => You've loaded a HF checkpoint.
+        if any(not any(key.startswith(prefix) for prefix in {"model", "head"}) for key in loaded_keys):  # => You've loaded a HF checkpoint.
             print("Loading HuggingFace checkpoint into ArchIt model.")
             state_dict = {k:v for k,v in state_dict.items() if not k.startswith("head.")}  # If there is a head in the checkpoint that is literally named "head", it will cause a "state dict is corrupted" error since it looks like the head of ModelWithHead. The reason: when HF thinks you load from a base model checkpoint into a base-with-head model, it checks if any of the checkpoint keys (which should be base model fields) are not in the base model but are in the head. That means your checkpoint is not a base model after all and hence counts as corruption.
             consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.

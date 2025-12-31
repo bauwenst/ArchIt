@@ -24,7 +24,7 @@ classifiers = [
 
 dependencies = [
     "torch",
-    "transformers >= 4.39.3"
+    "transformers <= 4.49.0"  # 4.39.3 was the last stable version for DeBERTa, 4.49.0 was the last version with the old from_pretrained interface.
 ]
 
 [project.optional-dependencies]
