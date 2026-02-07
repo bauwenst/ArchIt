@@ -287,7 +287,7 @@ class ExtractiveAQAHead(Head[ExtractiveAQAHeadConfig]):
 
 @dataclass
 class DependencyParsingHeadConfig(HeadConfigWithLabels):  # If your IDE complains about this line, update your IDE :)
-    extended_model_config: PoolingAndStridingConfig=PoolingAndStridingConfig()
+    extended_model_config: PoolingAndStridingConfig=field(default_factory=PoolingAndStridingConfig)
 
     final_hidden_size_arcs: int=500
     final_hidden_size_relations: int=100
