@@ -370,7 +370,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         )
 
     @classmethod
-    def _load_pretrained_model(cls, empty_model_with_head: "ModelWithHead", state_dict, loaded_keys, pretrained_model_name_or_path, **kwargs):
+    def _load_pretrained_model(cls, empty_model_with_head: "ModelWithHead", state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs):
         """
         Indirection to trick PyTorch into recognising the base model in a checkpoint during .from_pretrained() on this class.
         To understand how this works, see https://bauwenst.github.io/posts/explainers/2024-08-31-How-from_pretrained-works/.
@@ -382,7 +382,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
             consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.
             loaded_keys = list(state_dict.keys())
 
-        return super()._load_pretrained_model(empty_model_with_head, state_dict, loaded_keys, pretrained_model_name_or_path, **kwargs)
+        return super()._load_pretrained_model(empty_model_with_head, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, **kwargs)
 
     base_model_prefix = "model._core"
 
