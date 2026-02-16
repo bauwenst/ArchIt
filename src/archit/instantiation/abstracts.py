@@ -128,7 +128,7 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     @abstractmethod
     def configClass(cls) -> Type[PC]:
         """Necessary so that when you call .from_pretrained() on this class, it knows how to parse the associated config."""
-        raise NotImplementedError
+        pass
 
     @classmethod
     @abstractmethod
@@ -207,7 +207,7 @@ class Head(Module, Generic[HC], ABC):
         """
         Necessary so that when you call .from_pretrained() on a ModelWithHead class, it knows how to parse the associated config.
         """
-        raise NotImplementedError
+        pass
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
