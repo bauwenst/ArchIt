@@ -62,8 +62,9 @@ class RecursiveAccessible(ABC):
     Small class that implements a recursive __getattr__ that goes looking for nested fields if a field doesn't exist.
     """
 
+    @classmethod
     @abstractmethod
-    def _fallback_fields(self) -> list[str]:
+    def _fallback_fields(cls) -> list[str]:
         pass
 
     def __getattr__(self, item):
@@ -113,13 +114,15 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
         """
         pass
 
+    @classmethod
     @abstractmethod
-    def _serialised_fields(self) -> list[str]:
+    def _serialised_fields(cls) -> list[str]:
         """Names of fields that should be kept when serialising."""
         pass
 
+    @classmethod
     @abstractmethod
-    def _constructor_runtime_arguments(self) -> list[str]:
+    def _constructor_runtime_arguments(cls) -> list[str]:
         """
         Names of constructor arguments which, rather than coming from a JSON, can also come from the user at runtime
         when calling .from_pretrained(). For example, if your constructor has arguments x and y, then x may come from
@@ -213,13 +216,16 @@ class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
         self.base_model_config = base_model_config
         self.head_config       = head_config
 
-    def _fallback_fields(self) -> list[str]:  # We try to get missing fields from the raw PretrainedConfig of the base model which is likely what the user meant.
+    @classmethod
+    def _fallback_fields(cls) -> list[str]:  # We try to get missing fields from the raw PretrainedConfig of the base model which is likely what the user meant.
         return ["base_model_config"]
 
-    def _serialised_fields(self) -> list[str]:
+    @classmethod
+    def _serialised_fields(cls) -> list[str]:
         return ["base_model_config", "head_config"]
 
-    def _constructor_runtime_arguments(self) -> list[str]:
+    @classmethod
+    def _constructor_runtime_arguments(cls) -> list[str]:
         return ["head_config", "base_model_config_class", "head_config_class"]
 
     def _syncSubconfigs(self):
