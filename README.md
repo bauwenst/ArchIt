@@ -27,9 +27,9 @@ Due to severe implementational changes in the `transformers` package, the versio
 depends on which version of `transformers` you are on:
 
 | Transformers version | ArchIt version | ArchIt commit |
-|----------------------|----------------|---------------| 
-| \<= v4.49.0          | \<= 2026.01.01 | 2ae3c29       |
-| \>= v4.50.0          | \>= 2026.01.02 | ???           | 
+|----------------------|---------------|---------------| 
+| \<= v4.49.0          | \<= 2026.03.01 | ???           |
+| \>= v4.50.0          | \> 2026.03.01 | ???           | 
 
 To install a specific version, replace `YOUR_COMMIT_HERE` by the relevant ArchIt commit.
 ```shell

@@ -3,6 +3,8 @@ from transformers.modeling_outputs import BaseModelOutput
 
 from .abstracts import BaseModel, BaseModelConfig, AllHiddenStatesAndPooling
 
+__all__ = ["RobertaBaseModel", "DebertaBaseModel", "ModernBertBaseModel", "GPT2BaseModel", "CanineBaseModel"]
+
 ########################################################################################################################
 
 from transformers.models.roberta import RobertaModel, RobertaConfig
@@ -172,7 +174,7 @@ class ModernBertBaseModel(BaseModel[ModernBertConfig]):
     def standardiseConfig(cls, raw_config: ModernBertConfig) -> BaseModelConfig:
         return BaseModelConfig(
             hidden_size=raw_config.hidden_size,
-            hidden_dropout_prob=raw_config.hidden_dropout_prob,
+            hidden_dropout_prob=raw_config.classifier_dropout,
             vocab_size=raw_config.vocab_size,
 
             num_hidden_layers=raw_config.num_hidden_layers,
