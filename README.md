@@ -26,14 +26,14 @@ using that new model. ArchIt writes that code for you.
 Due to severe implementational changes in the `transformers` package, the version of ArchIt you need
 depends on which version of `transformers` you are on:
 
-| Transformers version | ArchIt version | ArchIt commit |
-|----------------------|---------------|---------------| 
-| \<= v4.49.0          | \<= 2026.03.01 | ???           |
-| \>= v4.50.0          | \> 2026.03.01 | ???           | 
+| Transformers version | ArchIt version | 
+|----------------------|-------------| 
+| \<= v4.49.0          | \<= 2026.3.1 | 
+| \>= v4.50.0          | \> 2026.3.1 |
 
-To install a specific version, replace `YOUR_COMMIT_HERE` by the relevant ArchIt commit.
+To install a specific version, replace `YOUR_VERSION_HERE` below according to the table:
 ```shell
-pip install "archit @ git+https://github.com/bauwenst/ArchIt.git@YOUR_COMMIT_HERE"
+pip install "archit[all] == YOUR_VERSION_HERE"
 ```
 
 ## Usage

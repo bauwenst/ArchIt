@@ -28,7 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-github = [
-    "supar @ git+https://github.com/bauwenst/supar",
-    "tktkt[github] @ git+https://github.com/bauwenst/TkTkT"
+all = [
+    "supar_bauwenst"
 ]
+github = [
+]
+
+[project.urls]
+Source = "https://github.com/bauwenst/ArchIt"
+Issues = "https://github.com/bauwenst/ArchIt/issues"
