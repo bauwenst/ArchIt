@@ -223,7 +223,7 @@ class Head(Module, Generic[HC], ABC):
 @dataclass
 class ModelWithHeadOutput(ModelOutput):  # The convention in HF is that loss is always the 1st element and logits the 2nd.
     loss: Optional[Tensor] = None
-    logits: OneOrMoreTensors = None  # Must be None due to some stupid rule in ModelOutput.__post_init__(), even though it never actually is None.
+    logits: Optional[OneOrMoreTensors] = None  # Set to None during training because the accelerator converts all outputs to float32 and doing that with an N x L x V tensor can blow up memory.
     base_model_output: Optional[AllHiddenStatesAndPooling] = None
 
 
@@ -262,10 +262,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ) -> ModelWithHeadOutput:
         base_output = self.callBaseModel(input_ids, attention_mask, do_drop_intermediates=not output_hidden_states, **kwargs)
         logits      = self.head(base_output, attention_mask, **kwargs)
-        return ModelWithHeadOutput(
-            logits=logits,
-            base_model_output=base_output if output_hidden_states else None,
-            loss=self.model.computeLoss() + self.computeLoss(logits, labels)   if labels is not None else   self.model.computeLoss()
+        return ModelWithHeadOutput(  # Note: everything returned by this method will be converted to float32, so we have to be careful to only return the essentials.
+            loss=self.model.computeLoss() + self.computeLoss(logits, labels)   if labels is not None else   self.model.computeLoss(),
+            logits=logits if not self.training else None,
+            base_model_output=base_output if output_hidden_states else None
         )
 
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
