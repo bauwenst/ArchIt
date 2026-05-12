@@ -32,6 +32,10 @@ class RobertaBaseModel(BaseModel[RobertaConfig]):
         )
 
     @classmethod
+    def coreClass(cls):
+        return RobertaModel
+
+    @classmethod
     def buildCore(cls, raw_config: RobertaConfig):
         return RobertaModel(raw_config, add_pooling_layer=False)
 
@@ -77,8 +81,8 @@ class GPT2BaseModel(BaseModel[GPT2Config]):
         )
 
     @classmethod
-    def buildCore(cls, raw_config: GPT2Config):
-        return GPT2Model(raw_config)
+    def coreClass(cls):
+        return GPT2Model
 
     @classmethod
     def standardiseConfig(cls, raw_config: GPT2Config) -> BaseModelConfig:
@@ -126,8 +130,8 @@ class DebertaBaseModel(BaseModel[DebertaConfig]):
         return DebertaConfig
 
     @classmethod
-    def buildCore(cls, raw_config):
-        return DebertaModel(raw_config)
+    def coreClass(cls):
+        return DebertaModel
 
     @classmethod
     def standardiseConfig(cls, raw_config: DebertaConfig) -> BaseModelConfig:
@@ -167,8 +171,8 @@ class ModernBertBaseModel(BaseModel[ModernBertConfig]):
         )
 
     @classmethod
-    def buildCore(cls, raw_config: ModernBertConfig):
-        return ModernBertModel(raw_config)
+    def coreClass(cls):
+        return ModernBertModel
 
     @classmethod
     def standardiseConfig(cls, raw_config: ModernBertConfig) -> BaseModelConfig:
@@ -216,8 +220,8 @@ class CanineBaseModel(BaseModel[CanineConfig]):
         return CanineConfig
 
     @classmethod
-    def buildCore(cls, raw_config):
-        return CanineModel(raw_config)
+    def coreClass(cls):
+        return CanineModel
 
     @classmethod
     def standardiseConfig(cls, raw_config: CanineConfig) -> BaseModelConfig:

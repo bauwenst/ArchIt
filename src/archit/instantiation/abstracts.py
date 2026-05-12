@@ -41,7 +41,7 @@ HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors,
 from .configs import *
 from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
 from .mixins import StatefulLossMixin, LossState
-from ..util import dataclass_from_dict
+from ..util import dataclass_from_dict, classproperty
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
@@ -140,12 +140,39 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
 
     @classmethod
     @abstractmethod
+    def coreClass(cls) -> type[PreTrainedModel]:
+        """The type that will be returned by buildCore()."""
+        pass
+
+    @classmethod
     def buildCore(cls, raw_config: PC) -> PreTrainedModel:
         """
         The core is where most of the computation for .forward() happens, and is the HuggingFace object that would
         be called .base_model otherwise.
         """
-        pass
+        return cls.coreClass()(raw_config)
+
+    # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
+    # CombinedConfig (because it doesn't exist). That means if it is requested, it will always be in the PretrainedConfig
+    # of the base model.
+    # Since it is the class instantiated with a config that requests FA2 that needs to have a flag set to prevent an
+    # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
+    # PretrainedConfig. There are two such classes: the class of the core (which actually switches between attention
+    # implementations, and thus the implementer has already set the relevant flags when designing it) but ALSO the
+    # BaseModel wrapper. Hence, we let class field accesses like BaseModel._supports_flash_attn_2 evaluate to the
+    # core's ._supports_flash_attn_2 class field.
+
+    @classproperty
+    def _supports_sdpa(cls):
+        return cls.coreClass()._supports_sdpa
+
+    @classproperty
+    def _supports_flash_attn(cls):
+        return cls.coreClass()._supports_flash_attn
+
+    @classproperty
+    def _supports_flash_attn_2(cls):
+        return cls.coreClass()._supports_flash_attn_2
 
 
 class Head(Module, Generic[HC], ABC):

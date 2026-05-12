@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch
-from supar import modules as snn  # Note: You must install supar from GitHub. The pip version is more than 2 years out of date! https://github.com/yzhangcs/parser
+from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
 from supar.utils.fn import pad
 
 from .configs import RecursiveSerialisable, CombinedConfig, PC, HC, HeadConfig

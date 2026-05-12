@@ -96,3 +96,17 @@ def dataclass_from_dict(cls: type, as_dict: dict):
                 kwargs[field_name] = value
 
     return cls(**kwargs)
+
+
+class classproperty:
+    """
+    Equivalent to the sequence of decorators
+        @classmethod
+        @property
+    except this one actually works.
+    """
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, obj, owner):
+        return self.func(owner)
