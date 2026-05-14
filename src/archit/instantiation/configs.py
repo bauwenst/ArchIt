@@ -213,8 +213,8 @@ class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
 
         assert isinstance(base_model_config, base_model_config_class)
         assert isinstance(head_config, head_config_class)
-        self.base_model_config = base_model_config
-        self.head_config       = head_config
+        self.base_model_config: PC = base_model_config
+        self.head_config: HC       = head_config
 
     @classmethod
     def _fallback_fields(cls) -> list[str]:  # We try to get missing fields from the raw PretrainedConfig of the base model which is likely what the user meant.

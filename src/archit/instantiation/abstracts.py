@@ -186,6 +186,7 @@ class Head(Module, Generic[HC], ABC):
         self.assertConfigConstraints(base_config, head_config)
 
     def post_init(self):
+        """It is the responsibility of subclasses of this class to call this method at the end of their constructor."""
         self.apply(self._init_weights)  # Recursively applies the given function to all child Modules and then self.
 
     def _init_weights(self, module: Module):
@@ -278,6 +279,12 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self._loss_function = loss
 
         assert isinstance(head, self.__class__.headClass())
+        self.tie_weights()  # The base model and the head have their own post_init() that initialises their weights and, for the base model, does weight tying internally. What isn't done yet, is tying across the model and the head.
+
+    def tie_weights(self):  # We don't want the functionality implemented in PreTrainedModel because it automatically ties between body and head if input/output embeddings are defined. We handle it differently.
+        pass
+
+    # base + head
 
     def forward(
         self,
@@ -298,6 +305,12 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
         return super().__call__(*args, **kwargs)
 
+    # base
+
+    @property
+    def base_model(self) -> PreTrainedModel:
+        return self.model.base_model
+
     def callBaseModel(
         self,
         input_ids: Tensor,
@@ -307,9 +320,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ) -> AllHiddenStatesAndPooling:
         return self.model(input_ids, attention_mask, do_drop_intermediates=do_drop_intermediates, **kwargs)
 
-    @property
-    def base_model(self) -> PreTrainedModel:
-        return self.model.base_model
+    # loss
 
     @property
     def loss_function(self) -> _Loss:  # Need to override this property because Les Incompétents always find a way to mess up their design.  https://github.com/huggingface/transformers/pull/34191#issuecomment-2539200643

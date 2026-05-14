@@ -141,7 +141,7 @@ class SequenceClassificationHeadForNestedBatches(SequenceClassificationHead):
 
 @dataclass
 class MaskedLMHeadConfig(HeadConfig):
-    pass
+    tie_weights: bool = False
 
 
 class MaskedLMHead(Head[MaskedLMHeadConfig]):
@@ -187,7 +187,7 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
 
 @dataclass
 class CausalLMHeadConfig(HeadConfig):
-    pass
+    tie_weights: bool = False
 
 
 class CausalLMHead(Head[CausalLMHeadConfig]):
