@@ -2,7 +2,8 @@
 Defines the three config objects for ArchIt's three main classes.
 """
 from abc import abstractmethod, ABC
-from typing import TypeVar, Generic, Type, Union, Tuple, Protocol, Any
+from typing import TypeVar, Generic, Union, Protocol, Any
+from typing_extensions import Self
 from dataclasses import dataclass
 
 from transformers import PretrainedConfig
@@ -34,6 +35,10 @@ class Dictable(Protocol):
     def to_dict(self) -> dict:
         pass
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        pass
+
 
 class RecursiveSerialisable(Dictable):
     """
@@ -55,6 +60,10 @@ class RecursiveSerialisable(Dictable):
             except:
                 pass  # If d[k] does not have the method, it is assumed to be immediately serialisable. No .__dict__ is called on it either.
         return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        return cls(**data)
 
 
 class RecursiveAccessible(ABC):
@@ -136,7 +145,7 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
     ### HuggingFace overrides
 
     @classmethod
-    def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> Tuple[dict, dict]:
+    def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> tuple[dict, dict]:
         json_dict, remaining_kwargs = super().get_config_dict(pretrained_model_name_or_path, **kwargs)
 
         kwargs_to_add_to_dict = cls._constructor_runtime_arguments()
@@ -151,6 +160,10 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
 
     def to_dict(self) -> dict[str, Any]:  # PretrainedConfig's to_dict has priority, so we override that behaviour.
         return RecursiveSerialisable.to_dict(self)
+
+    @classmethod
+    def from_dict(cls, config_dict: dict[str, Any], **kwargs) -> Self:
+        return PretrainedConfig.from_dict(config_dict, **kwargs)  # Calls the constructor, plus some HF stuff.
 
     ### Implementations that hardcode some HuggingFace properties
 
@@ -182,7 +195,7 @@ class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
     model_type = "ArchIt (ignore this warning, it is raised by AutoModel)"
 
     def __init__(self, base_model_config: Union[dict,PC]=None, head_config: Union[dict,HC]=None,
-                 base_model_config_class: Type[PC]=None, head_config_class: Type[HC]=None, **kwargs):
+                 base_model_config_class: type[PC]=None, head_config_class: type[HC]=None, **kwargs):
         """
         Note: because HuggingFace's Config.from_pretrained() calls the constructor with only **kwargs and with dictionaries
         rather than objects as values, you need the default parameter values 'None' and you need to support dictionary values too.

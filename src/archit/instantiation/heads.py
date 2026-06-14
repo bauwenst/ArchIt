@@ -148,6 +148,10 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
     """
     Based on RoBERTa's LM head.
 
+    TODO: ModernBERT's standard deviation at initialisation for this head is
+        0.02 / math.sqrt(2 * self.config.num_hidden_layers)
+     which is much smaller than the usual 0.02. So, if weight tying is not used, consider using those initial values instead.
+
     Note: weight tying is enabled in the class that contains the head and the base model, not the head.
           Hence, no method implementations are dedicated to it here.
     """

@@ -191,7 +191,7 @@ class Head(Module, Generic[HC], ABC):
 
     def _init_weights(self, module: Module):
         if isinstance(module, torch.nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02...
+            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02. ModernBERT uses 1/sqrt(H) for its classification heads, which is 0.036 for H = 768.
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, torch.nn.LayerNorm):
