@@ -3,10 +3,11 @@ Defines the three config objects for ArchIt's three main classes.
 """
 from abc import abstractmethod, ABC
 from typing import TypeVar, Generic, Union, Protocol, Any
-from typing_extensions import Self
+from typing_extensions import Self, runtime_checkable
 from dataclasses import dataclass
-
 from transformers import PretrainedConfig
+
+import json
 
 
 __all__ = ["BaseModelConfig", "HeadConfig", "CombinedConfig", "PC", "HC"]
@@ -30,6 +31,7 @@ class BaseModelConfig:
     context_length: int
 
 
+@runtime_checkable
 class Dictable(Protocol):
     """Anything that has a method to_dict() for being turned into a dictionary. Due to duck typing, this includes PretrainedConfig."""
     def to_dict(self) -> dict:
@@ -38,6 +40,17 @@ class Dictable(Protocol):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         pass
+
+
+# "Extend" the JSON package's encoder to support Dictables.
+_default_json_encoder = json.JSONEncoder.default
+
+def _extended_default_json_encoder(self, obj):
+    if isinstance(obj, Dictable):
+        return obj.to_dict()
+    return _default_json_encoder(self, obj)
+
+json.JSONEncoder.default = _extended_default_json_encoder
 
 
 class RecursiveSerialisable(Dictable):
@@ -158,12 +171,12 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
     def _get_non_default_generation_parameters(self) -> dict:  # Needed to avoid triggering this bug (which will be fixed in transformers after October 2024): https://github.com/huggingface/transformers/pull/33934
         return dict()
 
-    def to_dict(self) -> dict[str, Any]:  # PretrainedConfig's to_dict has priority, so we override that behaviour.
-        return RecursiveSerialisable.to_dict(self)
+    def to_dict(self) -> dict[str, Any]:
+        return RecursiveSerialisable.to_dict(self)  # PretrainedConfig's to_dict otherwise has priority, so we override that behaviour.
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any], **kwargs) -> Self:
-        return PretrainedConfig.from_dict(config_dict, **kwargs)  # Calls the constructor, plus some HF stuff.
+        return PretrainedConfig.from_dict.__func__(cls, config_dict, **kwargs)  # Equivalent to cls(**config_dict) but with some extra HF stuff. The reason we use __func__ is so that the cls parameter is not bound to cls=PretrainedConfig but rather the cls here.
 
     ### Implementations that hardcode some HuggingFace properties
 
