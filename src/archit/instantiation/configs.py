@@ -63,7 +63,7 @@ class RecursiveSerialisable(Dictable):
         Non-recursively take whatever information exists in this object and turn it into a dictionary of things that
         potentially have a .to_dict() method to further turn them into dictionaries.
         """
-        return self.__dict__
+        return dict(self.__dict__)
 
     def to_dict(self) -> dict[str, Any]:
         d = self._fields_to_dictables()

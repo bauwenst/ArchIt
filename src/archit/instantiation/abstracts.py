@@ -387,6 +387,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         """
         # 1. Get the config needed to get the base model. (Note: similar work will be done again later in CombinedConfig.from_pretrained() when the checkpoint is unpacked a second time. It is what it is.)
         base_model_config, _ = PretrainedConfig.get_config_dict(checkpoint)  # Basically a static method of PretrainedConfig, not a class-specific method, used to read a JSON.
+        if not base_model_config:  # Since HF won't raise an error when the checkpoint literally doesn't fucking exist, we will.
+            raise FileNotFoundError(f"No model config was found for checkpoint '{checkpoint}'.")
         if "base_model_config" in base_model_config:  # In this case: (1) the base model's config lives one level deeper, and (2) the head config can be imputed.
             head_config       = head_config or dataclass_from_dict(cls.headClass().configClass(), base_model_config["head_config"])
             base_model_config = base_model_config["base_model_config"]
