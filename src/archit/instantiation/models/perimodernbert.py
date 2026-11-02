@@ -96,6 +96,15 @@ class ConserveDataType(nn.Module):
         return self.module(x, *args, **kwargs).to(input_dtype)
 
 
+class CastTo(nn.Module):
+    def __init__(self, dtype: torch.dtype):
+        super().__init__()
+        self._dtype = dtype
+
+    def forward(self, input: torch.Tensor, **kwargs) -> torch.Tensor:
+        return input.to(self._dtype)
+
+
 def Norm(norm_type: NormType, hidden_size: int, eps: float, bias: bool=True) -> nn.Module:
     """
     Chooses between LayerNorm and RMSNorm at construction time.
