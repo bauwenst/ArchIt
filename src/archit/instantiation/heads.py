@@ -141,12 +141,16 @@ class SequenceClassificationHeadForNestedBatches(SequenceClassificationHead):
 
 @dataclass
 class MaskedLMHeadConfig(HeadConfig):
-    pass
+    tie_weights: bool = False
 
 
 class MaskedLMHead(Head[MaskedLMHeadConfig]):
     """
     Based on RoBERTa's LM head.
+
+    TODO: ModernBERT's standard deviation at initialisation for this head is
+        0.02 / math.sqrt(2 * self.config.num_hidden_layers)
+     which is much smaller than the usual 0.02. So, if weight tying is not used, consider using those initial values instead.
 
     Note: weight tying is enabled in the class that contains the head and the base model, not the head.
           Hence, no method implementations are dedicated to it here.
@@ -187,7 +191,7 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
 
 @dataclass
 class CausalLMHeadConfig(HeadConfig):
-    pass
+    tie_weights: bool = False
 
 
 class CausalLMHead(Head[CausalLMHeadConfig]):
@@ -301,7 +305,7 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
 
-        from supar import modules as snn
+        from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
         self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.arc_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.rel_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)

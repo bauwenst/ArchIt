@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "archit"
-version = "2026.01.01"
+version = "v2026.04.01"
 description = "ArchIt: A framework for base-and-head language models, and toolkit for converting in-place modifications of PyTorch objects into class code."
 keywords = ["PyTorch", "machine learning"]
 
-requires-python = ">= 3.10"
+requires-python = ">= 3.9"
 authors = [
   {name = "Thomas Bauwens", email = "thomas.bauwens@kuleuven.be"}
 ]
@@ -28,7 +28,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-github = [
-    "supar @ git+https://github.com/bauwenst/supar",
-    "tktkt[github] @ git+https://github.com/bauwenst/TkTkT"
+all = [
+    "supar_bauwenst"
 ]
+github = [
+]
+
+[project.urls]
+Source = "https://github.com/bauwenst/ArchIt"
+Issues = "https://github.com/bauwenst/ArchIt/issues"

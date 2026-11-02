@@ -268,6 +268,10 @@ class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
         shifted_labels = labels[:, 1:].contiguous()
         return self.loss_function(shifted_logits.view(-1, self.config.base_model_config.vocab_size), shifted_labels.view(-1))
 
+    def tie_weights(self):
+        if self.config.head_config.tie_weights:
+            self._tie_or_clone_weights(self.get_output_embeddings(), self.get_input_embeddings())
+
     def get_output_embeddings(self) -> nn.Linear:
         assert isinstance(self.head, CausalLMHead)
         return self.head.dense
@@ -291,10 +295,13 @@ class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
         labels = labels.to(logits.device)
         return self.loss_function(logits.view(-1, self.config.base_model_config.vocab_size), labels.view(-1))
 
+    def tie_weights(self):
+        if self.config.head_config.tie_weights:  # Finally, the generics system pays off.
+            self._tie_or_clone_weights(self.get_output_embeddings(), self.get_input_embeddings())
+
     def get_output_embeddings(self) -> nn.Linear:
         """
-        Used for finding the Linear module whose .weight to tie. No need for a _tie_weights() method because reassigning
-        .weight is all you need to do and this is handled by modeling_utils.
+        Returns a reference to the module whose .weight should be reassigned when weight tying is done.
         """
         assert isinstance(self.head, MaskedLMHead)
         return self.head.dense2
@@ -302,6 +309,7 @@ class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
     def set_output_embeddings(self, new_embeddings: nn.Linear):
         """
         Used when there is no weight tying, but you resize the embedding matrix.
+        modeling_utils will make sure you receive a nn.Linear rather than a Tensor or an nn.Embedding.
         """
         assert isinstance(self.head, MaskedLMHead)
         self.head.dense2 = new_embeddings

@@ -15,7 +15,6 @@ from torch.nn import Module
 
 import warnings
 
-from tktkt.util.strings import *
 
 SUFFIX = "_modified"
 
@@ -124,6 +123,22 @@ class ModuleNode(Node):
 
         # TODO: Copy .forward() from the original class.
         return alignCharacter(s, "=")
+
+
+def alignCharacter(multiline_string: str, character_to_align: str) -> str:
+    """
+    Copied from TkTkT to not have dependency explosion.
+    """
+    lines = multiline_string.split("\n")
+    character_locations = [line.find(character_to_align) for line in lines]
+    move_character_to = max(character_locations)
+    for i, (line, loc) in enumerate(zip(lines, character_locations)):
+        if loc < 0:
+            continue
+
+        lines[i] = line[:loc] + " "*(move_character_to - loc) + line[loc:]
+
+    return "\n".join(lines)
 
 
 class NativeModuleNode(ModuleNode):

@@ -41,7 +41,7 @@ HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors,
 from .configs import *
 from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
 from .mixins import StatefulLossMixin, LossState
-from ..util import dataclass_from_dict
+from ..util import dataclass_from_dict, classproperty
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
@@ -128,7 +128,7 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     @abstractmethod
     def configClass(cls) -> Type[PC]:
         """Necessary so that when you call .from_pretrained() on this class, it knows how to parse the associated config."""
-        raise NotImplementedError
+        pass
 
     @classmethod
     @abstractmethod
@@ -140,12 +140,39 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
 
     @classmethod
     @abstractmethod
+    def coreClass(cls) -> type[PreTrainedModel]:
+        """The type that will be returned by buildCore()."""
+        pass
+
+    @classmethod
     def buildCore(cls, raw_config: PC) -> PreTrainedModel:
         """
         The core is where most of the computation for .forward() happens, and is the HuggingFace object that would
         be called .base_model otherwise.
         """
-        pass
+        return cls.coreClass()(raw_config)
+
+    # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
+    # CombinedConfig (because it doesn't exist). That means if it is requested, it will always be in the PretrainedConfig
+    # of the base model.
+    # Since it is the class instantiated with a config that requests FA2 that needs to have a flag set to prevent an
+    # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
+    # PretrainedConfig. There are two such classes: the class of the core (which actually switches between attention
+    # implementations, and thus the implementer has already set the relevant flags when designing it) but ALSO the
+    # BaseModel wrapper. Hence, we let class field accesses like BaseModel._supports_flash_attn_2 evaluate to the
+    # core's ._supports_flash_attn_2 class field.
+
+    @classproperty
+    def _supports_sdpa(cls):
+        return cls.coreClass()._supports_sdpa
+
+    @classproperty
+    def _supports_flash_attn(cls):
+        return cls.coreClass()._supports_flash_attn
+
+    @classproperty
+    def _supports_flash_attn_2(cls):
+        return cls.coreClass()._supports_flash_attn_2
 
 
 class Head(Module, Generic[HC], ABC):
@@ -159,11 +186,12 @@ class Head(Module, Generic[HC], ABC):
         self.assertConfigConstraints(base_config, head_config)
 
     def post_init(self):
+        """It is the responsibility of subclasses of this class to call this method at the end of their constructor."""
         self.apply(self._init_weights)  # Recursively applies the given function to all child Modules and then self.
 
     def _init_weights(self, module: Module):
         if isinstance(module, torch.nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02...
+            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02. ModernBERT uses 1/sqrt(H) for its classification heads, which is 0.036 for H = 768.
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, torch.nn.LayerNorm):
@@ -207,7 +235,7 @@ class Head(Module, Generic[HC], ABC):
         """
         Necessary so that when you call .from_pretrained() on a ModelWithHead class, it knows how to parse the associated config.
         """
-        raise NotImplementedError
+        pass
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
@@ -223,7 +251,7 @@ class Head(Module, Generic[HC], ABC):
 @dataclass
 class ModelWithHeadOutput(ModelOutput):  # The convention in HF is that loss is always the 1st element and logits the 2nd.
     loss: Optional[Tensor] = None
-    logits: OneOrMoreTensors = None  # Must be None due to some stupid rule in ModelOutput.__post_init__(), even though it never actually is None.
+    logits: Optional[OneOrMoreTensors] = None  # Set to None during training because the accelerator converts all outputs to float32 and doing that with an N x L x V tensor can blow up memory.
     base_model_output: Optional[AllHiddenStatesAndPooling] = None
 
 
@@ -251,6 +279,12 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         self._loss_function = loss
 
         assert isinstance(head, self.__class__.headClass())
+        self.tie_weights()  # The base model and the head have their own post_init() that initialises their weights and, for the base model, does weight tying internally. What isn't done yet, is tying across the model and the head.
+
+    def tie_weights(self):  # We don't want the functionality implemented in PreTrainedModel because it automatically ties between body and head if input/output embeddings are defined. We handle it differently.
+        pass
+
+    # base + head
 
     def forward(
         self,
@@ -262,14 +296,20 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ) -> ModelWithHeadOutput:
         base_output = self.callBaseModel(input_ids, attention_mask, do_drop_intermediates=not output_hidden_states, **kwargs)
         logits      = self.head(base_output, attention_mask, **kwargs)
-        return ModelWithHeadOutput(
-            logits=logits,
-            base_model_output=base_output if output_hidden_states else None,
-            loss=self.model.computeLoss() + self.computeLoss(logits, labels)   if labels is not None else   self.model.computeLoss()
+        return ModelWithHeadOutput(  # Note: everything returned by this method will be converted to float32, so we have to be careful to only return the essentials.
+            loss=self.model.computeLoss() + self.computeLoss(logits, labels)   if labels is not None else   self.model.computeLoss(),
+            logits=logits if not self.training else None,
+            base_model_output=base_output if output_hidden_states else None
         )
 
     def __call__(self, *args, **kwargs) -> ModelWithHeadOutput:
         return super().__call__(*args, **kwargs)
+
+    # base
+
+    @property
+    def base_model(self) -> PreTrainedModel:
+        return self.model.base_model
 
     def callBaseModel(
         self,
@@ -280,9 +320,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ) -> AllHiddenStatesAndPooling:
         return self.model(input_ids, attention_mask, do_drop_intermediates=do_drop_intermediates, **kwargs)
 
-    @property
-    def base_model(self) -> PreTrainedModel:
-        return self.model.base_model
+    # loss
 
     @property
     def loss_function(self) -> _Loss:  # Need to override this property because Les Incompétents always find a way to mess up their design.  https://github.com/huggingface/transformers/pull/34191#issuecomment-2539200643
@@ -349,6 +387,8 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
         """
         # 1. Get the config needed to get the base model. (Note: similar work will be done again later in CombinedConfig.from_pretrained() when the checkpoint is unpacked a second time. It is what it is.)
         base_model_config, _ = PretrainedConfig.get_config_dict(checkpoint)  # Basically a static method of PretrainedConfig, not a class-specific method, used to read a JSON.
+        if not base_model_config:  # Since HF won't raise an error when the checkpoint literally doesn't fucking exist, we will.
+            raise FileNotFoundError(f"No model config was found for checkpoint '{checkpoint}'.")
         if "base_model_config" in base_model_config:  # In this case: (1) the base model's config lives one level deeper, and (2) the head config can be imputed.
             head_config       = head_config or dataclass_from_dict(cls.headClass().configClass(), base_model_config["head_config"])
             base_model_config = base_model_config["base_model_config"]
