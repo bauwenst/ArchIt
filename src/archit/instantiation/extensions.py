@@ -2,7 +2,7 @@
 Partial implementations of ModelWithHead as a step-up from BaseModel towards ModelWithHead.
 These are NOT subclasses of BaseModel because they are oblivious to which HuggingFace model is wrapped.
 """
-from typing import TypeVar, Tuple
+from typing import TypeVar
 from dataclasses import dataclass
 from enum import Enum
 
@@ -10,8 +10,8 @@ import torch
 from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
 from supar.utils.fn import pad
 
-from .configs import RecursiveSerialisable, CombinedConfig, PC, HC, HeadConfig
-from .abstracts import BaseModel, Head, ModelWithHead, _Loss, Tensor, AllHiddenStatesAndPooling
+from .configs import RecursiveSerialisable, CombinedConfig, PC, HC
+from .abstracts import BaseModel, ModelWithHead, Tensor, AllHiddenStatesAndPooling
 
 
 class SubwordPooling(str, Enum):  # https://aclanthology.org/2021.eacl-main.194.pdf
@@ -46,8 +46,8 @@ class ForTokensGroupedByWord(ModelWithHead[PC, HC]):
     to a different way of treating its inputs and outputs), it is now a subclass of that instead.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,HC], extended_config: PoolingAndStridingConfig, model: BaseModel[PC], head: Head[HC], loss: _Loss):
-        super().__init__(combined_config=combined_config, model=model, head=head, loss=loss)
+    def __init__(self, combined_config: CombinedConfig[PC,HC], extended_config: PoolingAndStridingConfig, base_model_class: type[BaseModel[PC]]):
+        super().__init__(combined_config=combined_config, base_model_class=base_model_class)
         self.scalar_mix = snn.pretrained.ScalarMix(extended_config.layer_pooling) if extended_config.layer_pooling > 1 else lambda t: t[0]  # Has a dropout parameter, but I don't think it works properly.
 
         # Settings to save.
@@ -55,10 +55,10 @@ class ForTokensGroupedByWord(ModelWithHead[PC, HC]):
         self._pooling_method = extended_config.word_pooling
         self._stride         = extended_config.stride
 
-        base_config = model.__class__.standardiseConfig(model.config)
+        base_config = base_model_class.standardiseConfig(combined_config.base_model_config)
         self._hidden_size    = base_config.hidden_size
         self._context_length = base_config.context_length
-        self._pad_index      = model.config.pad_token_id
+        self._pad_index: int = combined_config.base_model_config.pad_token_id
         if self._pad_index is None:
             raise ValueError("Failed to find pad_token_id in the base model's config.")
 
@@ -190,7 +190,7 @@ class ForNestedBatches(ModelWithHead[PC,HC]):
         return unflattenNestedBatches(flat_output, B1=B, B2=C)
 
 
-def flattenNestedBatches(embeddings: AllHiddenStatesAndPooling, attention_mask: Tensor) -> Tuple[AllHiddenStatesAndPooling, Tensor]:
+def flattenNestedBatches(embeddings: AllHiddenStatesAndPooling, attention_mask: Tensor) -> tuple[AllHiddenStatesAndPooling, Tensor]:
     """
     Converts a B1 x B2 x L x H batch and a B1 x B2 x L mask
     into a B1*B2 x L x H batch and a B1*B2 x L mask.

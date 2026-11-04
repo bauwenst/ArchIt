@@ -22,26 +22,26 @@ Two design choices that I will highlight:
 """
 from abc import abstractmethod, ABC
 from dataclasses import dataclass
-from typing import Optional, TypeVar, Generic, Type, Union, Tuple
+from typing import Optional, TypeVar, Generic, Union
 from typing_extensions import Self
 
+import re
 import torch
 from torch import Tensor, FloatTensor
 from torch.nn import Module
 from torch.nn.modules.loss import _Loss
-from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
 
-Tensors = Tuple[Tensor, ...]
+Tensors = tuple[Tensor, ...]
 OneOrMoreTensors = Union[Tensor, Tensors]
 HeadOutput = OneOrMoreTensors  # In general, a head can return multiple tensors, see e.g. the dependency parsing head.
 
 from .configs import *
 from .configs import PC, HC  # Have to do this explicitly for the type checker not to complain.
-from .mixins import StatefulLossMixin, LossState
-from ..util import dataclass_from_dict, classproperty
+from .mixins import *
+from ..util import classproperty
 
 __all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
 
@@ -126,7 +126,7 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     # This used to have @property. But @property is evil, so we no longer have it.
     @classmethod  # So you can call it on the class. Must come before @abstractmethod.  https://stackoverflow.com/a/53417582/9352077
     @abstractmethod
-    def configClass(cls) -> Type[PC]:
+    def configClass(cls) -> type[PC]:
         """Necessary so that when you call .from_pretrained() on this class, it knows how to parse the associated config."""
         pass
 
@@ -153,12 +153,12 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         return cls.coreClass()(raw_config)
 
     # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
-    # CombinedConfig (because it doesn't exist). That means if it is requested, it will always be in the PretrainedConfig
+    # CombinedConfig (because CombinedConfig only has a few fields). If the user wants it, it will always be in the PretrainedConfig
     # of the base model.
-    # Since it is the class instantiated with a config that requests FA2 that needs to have a flag set to prevent an
+    # Since it is the class instantiated with an FA2-requesting config that needs to have a flag set to prevent an
     # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
-    # PretrainedConfig. There are two such classes: the class of the core (which actually switches between attention
-    # implementations, and thus the implementer has already set the relevant flags when designing it) but ALSO the
+    # PretrainedConfig. There are two such classes: the class of the core (which often multiplexes between attention
+    # implementations, and thus the HuggingFace devs have already set the relevant flags when designing it) but ALSO the
     # BaseModel wrapper. Hence, we let class field accesses like BaseModel._supports_flash_attn_2 evaluate to the
     # core's ._supports_flash_attn_2 class field.
 
@@ -175,28 +175,28 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         return cls.coreClass()._supports_flash_attn_2
 
 
-class Head(Module, Generic[HC], ABC):
+class Head(HuggingfaceInitialisationMixin):
     """
     Adapter around implementations (or just implementations themselves) of heads that take BMOWPACA as input and
     spit out a tensor as output.
+
+    Subclasses MUST abide by the following rules:
+        1. The constructor arguments MUST NOT be changed. ModelWithHead relies on heads having a fixed constructor signature.
+        2. The constructor MUST call post_init() at the end, in order for weights to be properly initialised.
     """
 
-    def __init__(self, base_config: BaseModelConfig, head_config: HC):
+    def __init__(self, base_config: BaseModelConfig, head_config: HeadConfig):
         super().__init__()
-        self.assertConfigConstraints(base_config, head_config)
-
-    def post_init(self):
-        """It is the responsibility of subclasses of this class to call this method at the end of their constructor."""
-        self.apply(self._init_weights)  # Recursively applies the given function to all child Modules and then self.
+        head_config.assertConstraints()
 
     def _init_weights(self, module: Module):
         if isinstance(module, torch.nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02. ModernBERT uses 1/sqrt(H) for its classification heads, which is 0.036 for H = 768.
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)  # The 0.02 is normally a hyperparameter, but everyone uses 0.02. ModernBERT uses 1/sqrt(H) for its classification heads, which is 0.036 for H = 768.
             if module.bias is not None:
-                module.bias.data.zero_()
+                torch.nn.init.zeros_(module.bias)
         elif isinstance(module, torch.nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.constant_(module.weight, 1.0)
 
     @abstractmethod
     def forward(
@@ -213,29 +213,6 @@ class Head(Module, Generic[HC], ABC):
     #########################
     ##### CLASS METHODS #####
     #########################
-
-    @classmethod
-    def fromConfigs(cls, base_config: BaseModelConfig, head_config: HC) -> Self:
-        """
-        When the developer overrides a method and changes the signature, he gets a warning. This is not the case for
-        constructors. The only warning users get is when they don't call super().__init__(), but then constructors for
-        different heads could still have *additional* arguments and we don't want that.
-        Hence, we use this wrapper to force subclasses to be instantiable with no more than the base class's arguments.
-        """
-        return cls(base_config, head_config)
-
-    @classmethod
-    @abstractmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: HC):
-        pass
-
-    @classmethod
-    @abstractmethod
-    def configClass(cls) -> Type[HC]:
-        """
-        Necessary so that when you call .from_pretrained() on a ModelWithHead class, it knows how to parse the associated config.
-        """
-        pass
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
@@ -262,27 +239,33 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     for them and ask for a config instead.
     """
 
-    config_class = CombinedConfig
+    config_class = CombinedConfig  # In PretrainedModel.__init_subclass__, this class field gets priority for determining the config class. Used to be a classmethod-property in Transformers, but Python deprecated those.
 
-    def __init__(self, combined_config: CombinedConfig[PC,HC], model: BaseModel[PC], head: Head[HC], loss: _Loss):
+    def __init__(self, combined_config: CombinedConfig[PC,HC], base_model_class: type[BaseModel[PC]]):  # Head class needn't be known because it is uniquely associated with the head config.
         """
         No user of this class should use the constructor, except the call to cls() inside .from_pretrained() (hence why
         the first argument is a config, despite the other arguments being existing instances that won't use that config).
         """
         super().__init__(combined_config)
         self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
-        self.supports_gradient_checkpointing = model.base_model.supports_gradient_checkpointing
+        head_class = combined_config.head_config.headClass()
+        assert combined_config.head_config.getInputSignature()  == self.headSignature().getInputSignature()
+        assert combined_config.head_config.getOutputSignature() == self.headSignature().getOutputSignature()
 
-        # Note: when you change the names of these fields, also change the strings in _load_pretrained_model().
-        self.model: BaseModel[PC] = model
-        self.head: Head[HC]       = head
-        self._loss_function = loss
+        # Note: when you change the names of these fields, also change the regex in key_mapping below.
+        self.model: BaseModel[PC] = base_model_class(combined_config.base_model_config)
+        self.head: Head           = head_class(base_model_class.standardiseConfig(combined_config.base_model_config), combined_config.head_config)
+        self._loss_function: _Loss = self.buildLoss()
 
-        assert isinstance(head, self.__class__.headClass())
-        self.tie_weights()  # The base model and the head have their own post_init() that initialises their weights and, for the base model, does weight tying internally. What isn't done yet, is tying across the model and the head.
+        self.supports_gradient_checkpointing = self.model.base_model.supports_gradient_checkpointing
+        self.post_init()  # Note: The base model and the head have their own post_init() that initialises their weights and does weight tying internally. What isn't done yet, is weight tying across the model and the head. What also isn't done yet is announcing the existing tied weights to the MwH wrapper. This post_init() does exactly that. It will not re-initialise weights because of HF's _is_hf_initialized flag.
 
-    def tie_weights(self):  # We don't want the functionality implemented in PreTrainedModel because it automatically ties between body and head if input/output embeddings are defined. We handle it differently.
-        pass
+    def _init_weights(self, module: Module):
+        # For modules that are part of the head, switch to the head's initialiser. This doesn't happen automatically in smart_apply because the head is not a PretrainedModel, but ModelWithHead is, and so this _init_weights applies to all its children.
+        if module in self.head.modules():
+            self.head._init_weights(module)
+        else:
+            super()._init_weights(module)
 
     # base + head
 
@@ -334,95 +317,60 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     ##### CLASS METHODS #####
     #########################
 
-    # Property-classmethods were deprecated in Python and the config_class method was deprecated in Transformers.
-    # @classmethod
-    # @property
-    # def config_class(cls) -> Type[PretrainedConfig]:  # Because .from_pretrained() uses it.
-    #     return CombinedConfig
-
     # This obviously needs to be a class-level method or field (a property is not allowed), so we choose method to tag it as abstract.
     @classmethod
     @abstractmethod
-    def headClass(cls) -> Type[Head[HC]]:  # Because all Head classes have the same constructor method .fromConfigs(), all you need to .buildHead() is to know the class to call it on.
+    def headSignature(cls) -> type[TensorSignature]:  # Note: not type[HC] because you can instantiate with many configs HC.
+        """Heads of this ModelWithHead are allowed to be any subclass of this class."""
         pass
 
-    @classmethod
-    def buildHead(cls, base_model_config: BaseModelConfig, head_config: HC) -> Head[HC]:
-        return cls.headClass().fromConfigs(base_model_config, head_config)
+    @classmethod  # Not abstract because usually the task does not adjust the head config. Only in case of QA/AQA.
+    def adjustHeadConfig(cls, head_config: HC):
+        pass
 
-    @classmethod
     @abstractmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         pass
 
     @classmethod
     def fromModelAndHeadConfig(cls, base_model: BaseModel, head_config: HC) -> Self:
         """Expects a model that has already been loaded, and assumes you want the head randomised."""
-        return cls(
+        mwh = cls(
             CombinedConfig(base_model_config=base_model.config, head_config=head_config),
-            base_model,
-            cls.buildHead(base_model.__class__.standardiseConfig(base_model.config), head_config),
-            cls.buildLoss()
+            base_model_class=type(base_model)
         )
+        mwh.model = base_model
 
     @classmethod
-    def from_pretrained(cls, checkpoint: str, base_model_class: Type[BaseModel[PC]], head_config: HC=None) -> "ModelWithHead[PC,HC]":  # Can't use Self here because it is trumped by the strange return type of the call inside the function.
+    def from_pretrained(cls, checkpoint: str,
+                        base_model_class: type[BaseModel[PC]], head_config: HC=None, head_config_class: type[HC]=None, **kwargs) -> "ModelWithHead[PC,HC]":  # Can't use Self here because it is trumped by the strange return type of the call inside the function.
         """
-        Load the model from an existing checkpoint. Distinguishes between two cases:
-            - The given checkpoint is of the correct model-with-head. In that case, no head config is needed.
-            - The given checkpoint is of a model without a head. In that case, the head config is used to construct a new head.
+        Load the model from an existing checkpoint (of this ModelWithHead OR of just the base model), rather than a config.
 
-        How HuggingFace's .from_pretrained() loads weights is that it first creates an instance of the class by calling
-        its constructor, and then it reads the provided checkpoint file by querying whatever fields there exist in that
-        instance. Usually, that constructor only takes a config and explicitly defines the PyTorch module tree.
-        Because a ModelWithHead doesn't know which base model will be used beforehand, it doesn't have a pre-determined
-        module tree and cannot just be constructed with a config alone. (Not even by saving the class name in the config,
-        because we don't have a mapping between the names and file paths of custom classes.)
-
-        In short: the goal is to construct all the objects needed for the ModelWithHead constructor (except for the
-        CombinedConfig, since from_pretrained helps us to construct that): a base model, a head, and a loss function.
-        The weights in each of these will be set in the super() call.
-        The way we communicate those constructor arguments is that .from_pretrained() passes any *args and **kwargs
-        through itself to the constructor. This method's responsibility is to create those *args and **kwargs.
+        The additional parameters are necessary to correctly parse the content of the checkpoint. If the checkpoint
+        contains a head config, only the head config class is needed. Otherwise a full head config is needed.
         """
-        # 1. Get the config needed to get the base model. (Note: similar work will be done again later in CombinedConfig.from_pretrained() when the checkpoint is unpacked a second time. It is what it is.)
-        base_model_config, _ = PretrainedConfig.get_config_dict(checkpoint)  # Basically a static method of PretrainedConfig, not a class-specific method, used to read a JSON.
-        if not base_model_config:  # Since HF won't raise an error when the checkpoint literally doesn't fucking exist, we will.
-            raise FileNotFoundError(f"No model config was found for checkpoint '{checkpoint}'.")
-        if "base_model_config" in base_model_config:  # In this case: (1) the base model's config lives one level deeper, and (2) the head config can be imputed.
-            head_config       = head_config or dataclass_from_dict(cls.headClass().configClass(), base_model_config["head_config"])
-            base_model_config = base_model_config["base_model_config"]
-
-        base_model_config = base_model_class.configClass().from_dict(base_model_config)
-
-        # 2. Instantiate the base model with that config, instantiate the head with that and the head config, and the loss.
         return super().from_pretrained(
             checkpoint,
             # Unnamed arguments (*args) passed to PretrainedModel.from_pretrained() are passed straight to the constructor of this class, except the checkpoint is replaced by a config.
-            base_model_class(base_model_config),  # A mix between .from_config (which only exists on auto classes and expects a config from the user) and .from_pretrained (just to get the config so the user doesn't have to supply it).
-            cls.buildHead(base_model_class.standardiseConfig(base_model_config), head_config),
-            cls.buildLoss(),
+            base_model_class,
 
             # Keyword arguments (**kwargs) are passed first to PretrainedConfig.from_pretrained() and only what remains ends up in PretrainedModel.from_pretrained(). Do note that PretrainedConfig.from_pretrained() does NOT pass these **kwargs to the constructor and only uses them for administrative stuff by default; I forcibly add them in get_config_dict().
             head_config=head_config,
             base_model_config_class=base_model_class.configClass(),
-            head_config_class=cls.headClass().configClass()
+            head_config_class=head_config_class,
+
+            # Popped kwarg by PretrainedModel.from_pretrained(). Adapts HF weights to where they live in ArchIt, while leaving ArchIt checkpoints untouched.
+            key_mapping={
+                # Rules:
+                #  1. If key starts with "model.core." or "head.", do not do anything.
+                #  2. For all other keys:
+                #       - if you start with the prefix, remove it.
+                #       - prepend "model.core." (even to the head in case of a heady model, because regex cannot tell the difference between the head of the heady model vs. the modules of the headless model)
+                r"^(?!" + re.escape(cls.base_model_prefix) + r"\.|head\.)(?:" + re.escape(base_model_class.coreClass().base_model_prefix) + r"\.)?": cls.base_model_prefix + "."
+            },
+            **kwargs
         )
-
-    @classmethod
-    def _load_pretrained_model(cls, empty_model_with_head: "ModelWithHead", state_dict, loaded_keys, pretrained_model_name_or_path, **kwargs):
-        """
-        Indirection to trick PyTorch into recognising the base model in a checkpoint during .from_pretrained() on this class.
-        To understand how this works, see https://bauwenst.github.io/posts/explainers/2024-08-31-How-from_pretrained-works/.
-        """
-        loaded_keys = set(state_dict.keys())
-        if any(not any(key.startswith(prefix) for prefix in {"model", "head"}) for key in loaded_keys):  # => You've loaded a HF checkpoint.
-            print("Loading HuggingFace checkpoint into ArchIt model.")
-            state_dict = {k:v for k,v in state_dict.items() if not k.startswith("head.")}  # If there is a head in the checkpoint that is literally named "head", it will cause a "state dict is corrupted" error since it looks like the head of ModelWithHead. The reason: when HF thinks you load from a base model checkpoint into a base-with-head model, it checks if any of the checkpoint keys (which should be base model fields) are not in the base model but are in the head. That means your checkpoint is not a base model after all and hence counts as corruption.
-            consume_prefix_in_state_dict_if_present(state_dict, empty_model_with_head.model.base_model.base_model_prefix + ".")  # In-place.
-            loaded_keys = list(state_dict.keys())
-
-        return super()._load_pretrained_model(empty_model_with_head, state_dict, loaded_keys, pretrained_model_name_or_path, **kwargs)
 
     base_model_prefix = "model._core"
 
@@ -440,3 +388,10 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
                 # print("\t> Accessing", obj.__class__.__name__ + "." + name)
                 obj = getattr(obj, name)
             return obj
+
+    def _get_name_of_module(self, module: torch.nn.Module) -> str:
+        for name, module_reference in self.named_modules():
+            if module_reference is module:
+                return name
+        else:
+            raise ValueError(f"{module!r} is not a submodule of this {type(self).__name__}")

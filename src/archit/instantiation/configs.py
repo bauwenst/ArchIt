@@ -1,16 +1,23 @@
 """
 Defines the three config objects for ArchIt's three main classes.
 """
-from abc import abstractmethod, ABC
-from typing import TypeVar, Generic, Union, Protocol, Any
+from __future__ import annotations
+from typing import TypeVar, Generic, Union, Protocol, Any, TYPE_CHECKING
 from typing_extensions import Self, runtime_checkable
-from dataclasses import dataclass
+from abc import abstractmethod, ABC, ABCMeta
+from dataclasses import dataclass, field
 from transformers import PretrainedConfig
 
 import json
 
+from ..util import is_abstract_method
 
-__all__ = ["BaseModelConfig", "HeadConfig", "CombinedConfig", "PC", "HC"]
+
+__all__ = [
+    "BaseModelConfig",
+    "TensorSignature", "HeadConfig", "HeadConfigWithLabels", "HeadConfigWithModelTying", "TokenClassifierHeadConfig", "PooledClassifierHeadConfig", "TokenVocabularyHeadConfig",
+    "CombinedConfig", "PC", "HC"
+]
 
 
 @dataclass
@@ -160,6 +167,8 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
     @classmethod
     def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> tuple[dict, dict]:
         json_dict, remaining_kwargs = super().get_config_dict(pretrained_model_name_or_path, **kwargs)
+        if not json_dict:  # Since HF won't raise an error when the checkpoint literally doesn't fucking exist, we will.
+            raise FileNotFoundError(f"No model config was found for checkpoint '{pretrained_model_name_or_path}'.")
 
         kwargs_to_add_to_dict = cls._constructor_runtime_arguments()
         for key in kwargs_to_add_to_dict:
@@ -197,8 +206,116 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
         return {k:v for k,v in fields_as_dict.items() if k in fields_to_keep}  # Pop the gigantic amount of shit we didn't ask for.
 
 
-class HeadConfig(RecursiveSerialisable):
-    pass
+class _TensorSignatureABCMeta(ABCMeta):
+    """
+    Enforces that headClass() must be defined only after defining getInputSignature() and getOutputSignature().
+    """
+    def __new__(mcs, name, bases, namespace, **kwargs):  # Runs when a subclass is declared.
+        cls = super().__new__(mcs, name, bases, namespace, **kwargs)  # namespace is the code written in the specific subclass.
+
+        # Now that the class exists, we can check method order.
+        earlier_methods = ["getInputSignature", "getOutputSignature"]
+        later_method = "headClass"
+        if later_method in namespace and not is_abstract_method(cls, later_method):  # => This class defines it concretely.
+            if any(m in namespace for m in earlier_methods):
+                raise TypeError("Cannot define tensor signature (which is true for many head classes) at the same time as the head class itself. Do this in a parent class.")
+            elif any(is_abstract_method(cls, m) for m in earlier_methods):  # If this check raises an AttributeError, you have put the metaclass on a class that does not even define abstractly define the earlier methods, which is bad.
+                raise TypeError(f"Cannot define head class when tensor signature methods aren't implemented yet. (Do that in a parent class.)")
+
+        return cls
+
+
+class TensorSignature(metaclass=_TensorSignatureABCMeta):
+    """
+    Declares the input and output shapes of the tensors of a module.
+
+    In ArchIt, we use this to check whether a head is compatible with a task at runtime, after the user has potentially
+    ignored the type checker's warnings about a wrong signature, but before any GPU operations have been performed.
+
+    You can choose whether you implement the methods of this class in pure TensorSignature subclasses, or directly in a
+    HeadConfig subclass. Either way, you should not implement them in leaf subclasses of HeadConfig, because those are
+    for heads with a concrete forward() method and the whole point of signatures is that they stretch across more than one forward()
+    implementation.
+    """
+    @classmethod
+    @abstractmethod
+    def getInputSignature(cls) -> tuple:
+        pass
+
+    @classmethod
+    @abstractmethod
+    def getOutputSignature(cls) -> tuple:
+        pass
+
+
+if TYPE_CHECKING:
+    from .abstracts import Head
+
+
+class HeadConfig(RecursiveSerialisable, TensorSignature):
+    """
+    Config that determines both which Head class will be put on top of the model,
+    and how it is parameterised.
+    """
+    @classmethod
+    @abstractmethod
+    def headClass(cls) -> type[Head]:
+        """Which class is constructed by this head config."""
+        pass
+
+    def assertConstraints(self):
+        """Called at head construction time (not config construction time) to validate that it would produce a feasible head."""
+        pass
+
+    def buildHead(self, base_config: BaseModelConfig) -> Head:
+        return self.headClass()(base_config, self)
+
+
+@dataclass
+class HeadConfigWithLabels(HeadConfig):   # Your IDE might complain about extensions of this class, but due to the kw_only flag, it's all legal.
+    num_labels: int = field(default=0, kw_only=True)  # It has a default so that users don't have to specify this (tasks automate it).
+
+    def assertConstraints(self):
+        assert self.num_labels > 0
+
+
+@dataclass
+class TokenClassifierHeadConfig(HeadConfigWithLabels):
+    @classmethod
+    def getInputSignature(self) -> tuple:
+        return ("N", "L", "H")
+
+    @classmethod
+    def getOutputSignature(self) -> tuple:
+        return ("N", "L", "C")
+
+
+@dataclass
+class PooledClassifierHeadConfig(HeadConfigWithLabels):
+    @classmethod
+    def getInputSignature(self) -> tuple:
+        return ("N", "L", "H")
+
+    @classmethod
+    def getOutputSignature(self) -> tuple:
+        return ("N", "C")
+
+
+@dataclass
+class HeadConfigWithModelTying(HeadConfig):
+    """Head config allowing the relevant head weights to be tied to weight that do not live in the head."""
+    tie_to_model: bool = False
+
+
+@dataclass
+class TokenVocabularyHeadConfig(HeadConfigWithModelTying):
+    @classmethod
+    def getInputSignature(self) -> tuple:
+        return ("N", "L", "H")
+
+    @classmethod
+    def getOutputSignature(self) -> tuple:
+        return ("N", "L", "V")
 
 
 PC = TypeVar("PC", bound=PretrainedConfig)
@@ -239,6 +356,17 @@ class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
 
         assert isinstance(base_model_config, base_model_config_class)
         assert isinstance(head_config, head_config_class)
+
+        # Now that we know both configs are of the types they should be, rewire weight tying from transformers v4 to v5.
+        if hasattr(base_model_config, "tie_word_embeddings"):
+            tied_weights_requested_base = base_model_config.tie_word_embeddings
+            if isinstance(head_config, HeadConfigWithModelTying):
+                if tied_weights_requested_base ^ head_config.tie_to_model:
+                    raise ValueError(f"Head weights should {'' if tied_weights_requested_base else 'not'} be tied according to the base model config (tie_word_embeddings), which contradicts the head config. Fix this mismatch.")
+            else:
+                pass  # This is probably quite normal during finetuning, so we don't raise an error nor a warning.
+            delattr(base_model_config, "tie_word_embeddings")
+
         self.base_model_config: PC = base_model_config
         self.head_config: HC       = head_config
 
