@@ -309,7 +309,7 @@ class ForDependencyParsing(ForTokensGroupedByWord[PC,TokenToTokenDualHeadsConfig
         2. The forward() method returns logits and no loss. It has a separate method for loss which is called by its users, which is not how you do that.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,TokenToTokenDualHeadsConfig], base_model_class: type[BaseModel[PC]]):
+    def __init__(self, combined_config: ArchitConfig[PC,TokenToTokenDualHeadsConfig], base_model_class: type[BaseModel[PC]]):
         super().__init__(combined_config, combined_config.head_config.extended_model_config, base_model_class)  # TODO: Yeah that's kind of a problem
 
     @classmethod

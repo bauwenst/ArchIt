@@ -10,7 +10,7 @@ import torch
 from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
 from supar.utils.fn import pad
 
-from .configs import RecursiveSerialisable, CombinedConfig, PC, HC
+from .configs import RecursiveSerialisable, ArchitConfig, PC, HC
 from .abstracts import BaseModel, ModelWithHead, Tensor, AllHiddenStatesAndPooling
 
 
@@ -46,7 +46,7 @@ class ForTokensGroupedByWord(ModelWithHead[PC, HC]):
     to a different way of treating its inputs and outputs), it is now a subclass of that instead.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,HC], extended_config: PoolingAndStridingConfig, base_model_class: type[BaseModel[PC]]):
+    def __init__(self, combined_config: ArchitConfig[PC,HC], extended_config: PoolingAndStridingConfig, base_model_class: type[BaseModel[PC]]):
         super().__init__(combined_config=combined_config, base_model_class=base_model_class)
         self.scalar_mix = snn.pretrained.ScalarMix(extended_config.layer_pooling) if extended_config.layer_pooling > 1 else lambda t: t[0]  # Has a dropout parameter, but I don't think it works properly.
 

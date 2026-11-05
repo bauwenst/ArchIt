@@ -43,7 +43,7 @@ from .configs import PC, HC  # Have to do this explicitly for the type checker n
 from .mixins import *
 from ..util import classproperty
 
-__all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "CombinedConfig", "AllHiddenStatesAndPooling"]
+__all__ = ["BaseModel", "BaseModelConfig", "Head", "HeadConfig", "ModelWithHead", "ArchitConfig", "AllHiddenStatesAndPooling"]
 
 
 class BaseModel(PreTrainedModel, Generic[PC], ABC):
@@ -120,8 +120,8 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
     #########################
 
     @classmethod
-    def from_config(cls, config: Union["CombinedConfig",PC]) -> Self:
-        return cls(config.base_model_config) if isinstance(config, CombinedConfig) else cls(config)
+    def from_config(cls, config: Union["ArchitConfig",PC]) -> Self:
+        return cls(config.base_model_config) if isinstance(config, ArchitConfig) else cls(config)
 
     # This used to have @property. But @property is evil, so we no longer have it.
     @classmethod  # So you can call it on the class. Must come before @abstractmethod.  https://stackoverflow.com/a/53417582/9352077
@@ -153,7 +153,7 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         return cls.coreClass()(raw_config)
 
     # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
-    # CombinedConfig (because CombinedConfig only has a few fields). If the user wants it, it will always be in the PretrainedConfig
+    # ArchitConfig (because ArchitConfig only has a few fields). If the user wants it, it will always be in the PretrainedConfig
     # of the base model.
     # Since it is the class instantiated with an FA2-requesting config that needs to have a flag set to prevent an
     # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
@@ -239,15 +239,15 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     for them and ask for a config instead.
     """
 
-    config_class = CombinedConfig  # In PretrainedModel.__init_subclass__, this class field gets priority for determining the config class. Used to be a classmethod-property in Transformers, but Python deprecated those.
+    config_class = ArchitConfig  # In PretrainedModel.__init_subclass__, this class field gets priority for determining the config class. Used to be a classmethod-property in Transformers, but Python deprecated those.
 
-    def __init__(self, combined_config: CombinedConfig[PC,HC], base_model_class: type[BaseModel[PC]]):  # Head class needn't be known because it is uniquely associated with the head config.
+    def __init__(self, combined_config: ArchitConfig[PC,HC], base_model_class: type[BaseModel[PC]]):  # Head class needn't be known because it is uniquely associated with the head config.
         """
         No user of this class should use the constructor, except the call to cls() inside .from_pretrained() (hence why
         the first argument is a config, despite the other arguments being existing instances that won't use that config).
         """
         super().__init__(combined_config)
-        self.config: CombinedConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
+        self.config: ArchitConfig[PC,HC] = self.config  # Same type annotation trick as in BaseModel.
         head_class = combined_config.head_config.headClass()
         assert combined_config.head_config.getInputSignature()  == self.headSignature().getInputSignature()
         assert combined_config.head_config.getOutputSignature() == self.headSignature().getOutputSignature()
@@ -336,7 +336,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
     def fromModelAndHeadConfig(cls, base_model: BaseModel, head_config: HC) -> Self:
         """Expects a model that has already been loaded, and assumes you want the head randomised."""
         mwh = cls(
-            CombinedConfig(base_model_config=base_model.config, head_config=head_config),
+            ArchitConfig(base_model_config=base_model.config, head_config=head_config),
             base_model_class=type(base_model)
         )
         mwh.model = base_model

@@ -16,7 +16,7 @@ from ..util import is_abstract_method
 __all__ = [
     "BaseModelConfig",
     "TensorSignature", "HeadConfig", "HeadConfigWithLabels", "HeadConfigWithModelTying", "TokenClassifierHeadConfig", "PooledClassifierHeadConfig", "TokenVocabularyHeadConfig",
-    "CombinedConfig", "PC", "HC"
+    "ArchitConfig", "PC", "HC"
 ]
 
 
@@ -320,7 +320,7 @@ class TokenVocabularyHeadConfig(HeadConfigWithModelTying):
 
 PC = TypeVar("PC", bound=PretrainedConfig)
 HC = TypeVar("HC", bound=HeadConfig)
-class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
+class ArchitConfig(RecursivePretrainedConfig, Generic[PC,HC]):
 
     model_type = "ArchIt (ignore this warning, it is raised by AutoModel)"
 
@@ -337,20 +337,20 @@ class CombinedConfig(RecursivePretrainedConfig, Generic[PC,HC]):
         """
         super().__init__(**kwargs)
 
-        # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than a CombinedConfig.
+        # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than an ArchitConfig.
         if base_model_config is None:
             if head_config is None:
-                raise ValueError("When you unpack a PretrainedConfig and give the result to the constructor of a CombinedConfig, you should also supply a HeadConfig as an extra argument.")
-            base_model_config = base_model_config_class(**kwargs)
+                raise ValueError("When you unpack a PretrainedConfig and give the result to the constructor of an ArchitConfig, you should also supply a HeadConfig as an extra argument.")
+            base_model_config: PC = base_model_config_class.from_dict(kwargs)
         else:
-            assert head_config is not None, "Unpacked a CombinedConfig but it was missing a head config without missing a base model config... That's impossible."
+            assert head_config is not None, "Unpacked an ArchitConfig but it was missing a head config without missing a base model config... That's impossible."
             if isinstance(base_model_config, dict):
-                base_model_config = base_model_config_class(**base_model_config)
+                base_model_config: PC = base_model_config_class.from_dict(base_model_config)
             else:
                 base_model_config_class = base_model_config.__class__
 
         if isinstance(head_config, dict):  # Deserialise head. Its class has to be known for this.
-            head_config = head_config_class(**head_config)
+            head_config: HC = head_config_class.from_dict(head_config)
         else:  # Head is already deserialised. We can impute its class.
             head_config_class = head_config.__class__
 
