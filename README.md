@@ -1,15 +1,18 @@
 # ArchIt: <ins>A</ins>utomatic PyTo<ins>r</ins>ch ar<ins>chi</ins>tec<ins>t</ins>ures 
-ArchIt lets you put heads on top of models without having to write dedicated task classes again and again.
+ArchIt lets you **put heads on top of language models** without having to re-implement heads per model or write dedicated `YourModelForThatTask` classes again and again.
 It also helps you rewrite PyTorch code for base models augmented at runtime.
 
-_**NOTICE:** from Transformers v4.50.0 onwards, the implementation of `from_pretrained` was [changed so significantly](https://github.com/huggingface/transformers/commit/071a161d3e38f56dbda2743b979f0afeed2cd4f1)
-that ArchIt is broken for all versions beyond `v4.49.0`. This will be fixed eventually. See the table below._
+## `archit.instantiation`: Add any head to any base model
+_Why in the heavens do there exist separate classes for 
+[`BertForTokenClassification`](https://github.com/huggingface/transformers/blob/31d7392997c13162c58f2e3c6555b5e060d6f60b/src/transformers/models/bert/modeling_bert.py#L1234) and 
+[`RobertaForTokenclassification`](https://github.com/huggingface/transformers/blob/31d7392997c13162c58f2e3c6555b5e060d6f60b/src/transformers/models/roberta/modeling_roberta.py#L1074)?_
+The base model encodes tokens into embeddings. The head converts embeddings into logits. Which base model produces the embeddings,
+and how it does so, is completely irrelevant to the head. Additionally, for all pairings of base model and head, the way
+the base model feeds into the head is the exact same, and it is pointless to reimplement it in a new class.
 
-## `archit.instantiation`: Add heads to a base model, without needing to write `YourModelForThatTask` classes
-Why in the heavens do we need separate classes for `RobertaForTokenClassification` and `DebertaForTokenclassification`?
-The base model encodes tokens into embeddings, and the head, which only cares about the resulting embeddings, converts
-them to logits. Separation of concerns. There is no need to rewrite "model-with-head" classes over and over again for each
-model augmentation.
+In HuggingFace `transformers`, given _B_ base models and _T_ modelling tasks, you need _B x T_ model-task-specific
+classes with _B x T_ head implementations. In ArchIt, there is only 1 model-task class (the `ModelWithHead`) which
+can wrap any base model and any of the _T_ model-agnostic head implementations. _Implement once, use anywhere_.
 
 This part of ArchIt is the backbone behind the [LaMoTO](https://github.com/bauwenst/LaMoTO) package.
 
@@ -27,57 +30,61 @@ Due to severe implementational changes in the `transformers` package, the versio
 depends on which version of `transformers` you are on:
 
 | Transformers version | ArchIt version | 
-|----------------------|-------------| 
-| \<= v4.49.0          | \<= 2026.3.1 | 
-| \>= v4.50.0          | \> 2026.3.1 |
+|----------------------|----------------| 
+| \<= v4.49.0          | \<= 2026.4.1   |
+| \>= v5.22.1          | \> 2026.4.1    |
 
-To install a specific version, replace `YOUR_VERSION_HERE` below according to the table:
+To install an older version of ArchIt, replace `YOUR_VERSION_HERE` below according to the table:
 ```shell
 pip install "archit[all] == YOUR_VERSION_HERE"
 ```
 
 ## Usage
-### Instantiation
+### `archit.instantiation`
 You have some kind of model architecture that generates token embeddings (e.g. some variant of `RobertaModel`) and you 
-want to put a head on it for fine-tuning. Because you are a sane individual, you'd prefer not writing code for a head 
-that has been defined hundreds of times before by others, and you also don't want to write a class for each 
+want to put a head on it for fine-tuning. Because you are a sane individual, _you'd prefer not writing code for a head 
+that has been defined hundreds of times before by others,_ and you also don't want to write a class for each 
 model-head combination.
 
 With ArchIt, you can just build the architecture at runtime:
+
 ```python
 from transformers import RobertaConfig
 
 from archit.instantiation.basemodels import RobertaBaseModel
+from archit.instantiation.heads import BiaffineTokenToTokenHeadConfig
 from archit.instantiation.tasks import ForDependencyParsing
-from archit.instantiation.heads import DependencyParsingHeadConfig
 
 model_with_head = ForDependencyParsing.fromModelAndHeadConfig(
     RobertaBaseModel(RobertaConfig()),
-    DependencyParsingHeadConfig()
+    BiaffineTokenToTokenHeadConfig()
 )
 ```
 
 "What if I have a pre-trained checkpoint of my core model?" No problem! The `from_pretrained` of these predefined 
 model-with-head architectures will read your checkpoint and put the weights into the right parts of the model:
+
 ```python
 from archit.instantiation.basemodels import RobertaBaseModel
+from archit.instantiation.heads import BiaffineTokenToTokenHeadConfig
 from archit.instantiation.tasks import ForDependencyParsing
-from archit.instantiation.heads import DependencyParsingHeadConfig
 
 model_with_head = ForDependencyParsing.from_pretrained(
-    "path/to/core-checkpoint", 
-    RobertaBaseModel, 
-    DependencyParsingHeadConfig()
+    "path/to/core-checkpoint",
+    RobertaBaseModel,
+    BiaffineTokenToTokenHeadConfig()
 )
 ```
+
 All you need to give is your checkpoint, a wrapper to put around the specific implementation of your core embedding model,
 and -- if the checkpoint is not already a checkpoint of `ForDependencyParsing` -- a config for the head you put on it.
 
-### Declaration
+### `archit.declaration`
 You've defined a PyTorch architecture in code. Now you reassign one of its fields.
 This new PyTorch architecture exists in memory, but not in code.
 
 With ArchIt, the code for the modified architecture can be generated automatically:
+
 ```python
 from transformers import RobertaForMaskedLM
 import torch
