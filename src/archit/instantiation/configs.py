@@ -6,7 +6,7 @@ from typing import TypeVar, Generic, Union, Protocol, Any, TYPE_CHECKING
 from typing_extensions import Self, runtime_checkable
 from abc import abstractmethod, ABC, ABCMeta
 from dataclasses import dataclass, field
-from transformers import PretrainedConfig
+from transformers import PreTrainedConfig
 
 import json
 
@@ -23,7 +23,7 @@ __all__ = [
 @dataclass
 class BaseModelConfig:
     """
-    Unbelievably, HuggingFace's PretrainedConfig, the parent class for all config classes, does NOT provide
+    Unbelievably, HuggingFace's PreTrainedConfig, the parent class for all config classes, does NOT provide
     a universal interface to get basic model properties like amount of layers, hidden size and so on.
     Instead, it says in its documentation that those properties "are common" in all subclasses. I don't play that way.
     """
@@ -40,7 +40,7 @@ class BaseModelConfig:
 
 @runtime_checkable
 class Dictable(Protocol):
-    """Anything that has a method to_dict() for being turned into a dictionary. Due to duck typing, this includes PretrainedConfig."""
+    """Anything that has a method to_dict() for being turned into a dictionary. Due to duck typing, this includes PreTrainedConfig."""
     def to_dict(self) -> dict:
         pass
 
@@ -115,20 +115,19 @@ class RecursiveAccessible(ABC):
                 raise AttributeError(item)
 
 
-class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, RecursiveAccessible, ABC):
+class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, RecursiveAccessible, ABC):
     """
     Allows recursively accessing fields and recursively serialising, and additionally provides all the functionality
-    of HuggingFace's PretrainedConfig. The assumption is that some of your fields are themselves a PretrainedConfig.
+    of HuggingFace's PreTrainedConfig. The assumption is that some of your fields are themselves a PreTrainedConfig.
 
     Deletes bullshit fields added by HuggingFace.
+    Does not use HuggingFace's subconfig system because it adds bloat.
     Not a dataclass because you need the super() call in the constructor.
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._deleteTopLevelFields()
-        self.is_composition = True  # HuggingFace's way of saying "run serialisation on the fields when you serialise me" nested configs. TODO: I think this feature has since been removed.
-        self.has_no_defaults_at_init = True  # Needed because otherwise the assertions below get triggered due to HF trying to re-instantiate the class without any constructor arguments.
 
     ### Abstracts
 
@@ -181,11 +180,11 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
         return dict()
 
     def to_dict(self) -> dict[str, Any]:
-        return RecursiveSerialisable.to_dict(self)  # PretrainedConfig's to_dict otherwise has priority, so we override that behaviour.
+        return RecursiveSerialisable.to_dict(self)  # PreTrainedConfig's to_dict otherwise has priority, so we override that behaviour.
 
     @classmethod
     def from_dict(cls, config_dict: dict[str, Any], **kwargs) -> Self:
-        return PretrainedConfig.from_dict.__func__(cls, config_dict, **kwargs)  # Equivalent to cls(**config_dict) but with some extra HF stuff. The reason we use __func__ is so that the cls parameter is not bound to cls=PretrainedConfig but rather the cls here.
+        return PreTrainedConfig.from_dict.__func__(cls, config_dict, **kwargs)  # Equivalent to cls(**config_dict) but with some extra HF stuff. The reason we use __func__ is so that the cls parameter is not bound to cls=PreTrainedConfig but rather the cls here.
 
     ### Implementations that hardcode some HuggingFace properties
 
@@ -200,7 +199,7 @@ class RecursivePretrainedConfig(PretrainedConfig, RecursiveSerialisable, Recursi
                 delattr(self, k)
 
     def _fields_to_dictables(self) -> dict[str, Union[Any,Dictable]]:
-        fields_as_dict = PretrainedConfig.to_dict(self)  # Although confusing, this to_dict should be read as being equivalent to _fields_to_dictables, which is called by RecursiveSerialisable's to_dict.
+        fields_as_dict = PreTrainedConfig.to_dict(self)  # Although confusing, this to_dict should be read as being equivalent to _fields_to_dictables, which is called by RecursiveSerialisable's to_dict.
 
         fields_to_keep = self._serialised_fields() + ["torch_dtype", "transformers_version"]
         return {k:v for k,v in fields_as_dict.items() if k in fields_to_keep}  # Pop the gigantic amount of shit we didn't ask for.
@@ -318,9 +317,9 @@ class TokenVocabularyHeadConfig(HeadConfigWithModelTying):
         return ("N", "L", "V")
 
 
-PC = TypeVar("PC", bound=PretrainedConfig)
+PC = TypeVar("PC", bound=PreTrainedConfig)
 HC = TypeVar("HC", bound=HeadConfig)
-class ArchitConfig(RecursivePretrainedConfig, Generic[PC,HC]):
+class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
 
     model_type = "ArchIt (ignore this warning, it is raised by AutoModel)"
 
@@ -332,7 +331,7 @@ class ArchitConfig(RecursivePretrainedConfig, Generic[PC,HC]):
 
         Also, because you can't (and shouldn't) deduce from a JSON dictionary which base model class and head class were used,
         this class has to be informed about them. For the PretrainedModel.from_pretrained(checkpoint, **kwargs) call,
-        those will all be in **kwargs. The implementation of RecursivePretrainedConfig.get_config_dict(...) above will pop
+        those will all be in **kwargs. The implementation of RecursivePreTrainedConfig.get_config_dict(...) above will pop
         from those kwargs the parameters that appear this constructor's signature, so that the **kwargs received here are a subset of the original kwargs.
         """
         super().__init__(**kwargs)
@@ -340,7 +339,7 @@ class ArchitConfig(RecursivePretrainedConfig, Generic[PC,HC]):
         # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than an ArchitConfig.
         if base_model_config is None:
             if head_config is None:
-                raise ValueError("When you unpack a PretrainedConfig and give the result to the constructor of an ArchitConfig, you should also supply a HeadConfig as an extra argument.")
+                raise ValueError("When you unpack a PreTrainedConfig and give the result to the constructor of an ArchitConfig, you should also supply a HeadConfig as an extra argument.")
             base_model_config: PC = base_model_config_class.from_dict(kwargs)
         else:
             assert head_config is not None, "Unpacked an ArchitConfig but it was missing a head config without missing a base model config... That's impossible."
@@ -371,7 +370,7 @@ class ArchitConfig(RecursivePretrainedConfig, Generic[PC,HC]):
         self.head_config: HC       = head_config
 
     @classmethod
-    def _fallback_fields(cls) -> list[str]:  # We try to get missing fields from the raw PretrainedConfig of the base model which is likely what the user meant.
+    def _fallback_fields(cls) -> list[str]:  # We try to get missing fields from the raw PreTrainedConfig of the base model which is likely what the user meant.
         return ["base_model_config"]
 
     @classmethod

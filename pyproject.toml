@@ -24,14 +24,12 @@ classifiers = [
 
 dependencies = [
     "torch",
-    "transformers <= 4.49.0"  # 4.39.3 was the last stable version for DeBERTa, 4.49.0 was the last version with the old from_pretrained interface.
+    "transformers"
 ]
 
 [project.optional-dependencies]
 all = [
     "supar_bauwenst"
-]
-github = [
 ]
 
 [project.urls]

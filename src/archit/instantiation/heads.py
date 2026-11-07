@@ -367,8 +367,10 @@ class BiaffineTokenToTokenHead(Head):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
 
-        # TODO: We can probably add some kind of import that breaks for supar but works for ours
-        from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
+        from supar import __version__, modules as snn
+        if tuple(map(int, __version__.split("."))) < (1,2,0):
+            raise ImportError("You have the wrong distribution of SuPar. DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.")
+
         self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.arc_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.rel_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)

@@ -30,7 +30,7 @@ import torch
 from torch import Tensor, FloatTensor
 from torch.nn import Module
 from torch.nn.modules.loss import _Loss
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndNoAttention as AllHiddenStatesAndPooling
 from transformers.utils import ModelOutput
 
@@ -153,11 +153,11 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         return cls.coreClass()(raw_config)
 
     # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
-    # ArchitConfig (because ArchitConfig only has a few fields). If the user wants it, it will always be in the PretrainedConfig
+    # ArchitConfig (because ArchitConfig only has a few fields). If the user wants it, it will always be in the PreTrainedConfig
     # of the base model.
     # Since it is the class instantiated with an FA2-requesting config that needs to have a flag set to prevent an
     # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
-    # PretrainedConfig. There are two such classes: the class of the core (which often multiplexes between attention
+    # PreTrainedConfig. There are two such classes: the class of the core (which often multiplexes between attention
     # implementations, and thus the HuggingFace devs have already set the relevant flags when designing it) but ALSO the
     # BaseModel wrapper. Hence, we let class field accesses like BaseModel._supports_flash_attn_2 evaluate to the
     # core's ._supports_flash_attn_2 class field.
@@ -355,7 +355,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
             # Unnamed arguments (*args) passed to PretrainedModel.from_pretrained() are passed straight to the constructor of this class, except the checkpoint is replaced by a config.
             base_model_class,
 
-            # Keyword arguments (**kwargs) are passed first to PretrainedConfig.from_pretrained() and only what remains ends up in PretrainedModel.from_pretrained(). Do note that PretrainedConfig.from_pretrained() does NOT pass these **kwargs to the constructor and only uses them for administrative stuff by default; I forcibly add them in get_config_dict().
+            # Keyword arguments (**kwargs) are passed first to PreTrainedConfig.from_pretrained() and only what remains ends up in PretrainedModel.from_pretrained(). Do note that PreTrainedConfig.from_pretrained() does NOT pass these **kwargs to the constructor and only uses them for administrative stuff by default; I forcibly add them in get_config_dict().
             head_config=head_config,
             base_model_config_class=base_model_class.configClass(),
             head_config_class=head_config_class,
