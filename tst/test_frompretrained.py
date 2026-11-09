@@ -1,3 +1,4 @@
+from tktkt.util.environment import has_gpu
 from archit.util import torchPrint
 
 
@@ -5,6 +6,9 @@ def test_equivalence_robertafortokens():
     """
     Test whether AutoModelForTokenClassification and ForSingleLabelTokenClassification make identical
     predictions after loading from the same RoBERTa checkpoint.
+
+    In other words: tests end-to-end equivalence of loading a HF base model into an ArchIt base model,
+    heads newly initialised.
     """
     import copy
     import torch
@@ -12,9 +16,9 @@ def test_equivalence_robertafortokens():
 
     from transformers import AutoModelForTokenClassification, AutoTokenizer, RobertaModel
     from archit.instantiation.basemodels import RobertaBaseModel
-    from archit.instantiation.tasks import ForSingleLabelTokenClassification, TokenClassificationHeadConfig
+    from archit.instantiation.tasks import ForSingleLabelTokenClassification, SingleLayerHeadConfig
 
-    model_archit = ForSingleLabelTokenClassification.from_pretrained("roberta-base", RobertaBaseModel, TokenClassificationHeadConfig(num_labels=19))
+    model_archit = ForSingleLabelTokenClassification.from_pretrained("roberta-base", RobertaBaseModel, SingleLayerHeadConfig(num_labels=19))
     model_hf     = AutoModelForTokenClassification.from_pretrained("roberta-base", num_labels=19)
 
     # First of all: check that the encoders are equal.
@@ -23,7 +27,7 @@ def test_equivalence_robertafortokens():
     assert torch.all(roberta_hf.embeddings.word_embeddings.weight == roberta_archit.embeddings.word_embeddings.weight).item()
     assert torch.all(roberta_hf.encoder.layer[5].output.dense.weight == roberta_archit.encoder.layer[5].output.dense.weight)
 
-    # Synchronise heads
+    # Synchronise heads (otherwise RNG plays a part)
     model_archit.head.dense = copy.deepcopy(model_hf.classifier)
     assert torch.all(model_hf.classifier.weight == model_archit.head.dense.weight).item()
 
@@ -34,14 +38,16 @@ def test_equivalence_robertafortokens():
     batch = tk(batch, return_tensors="pt", padding=True, truncation=True)
 
     # Inference
-    model_archit.to("cuda")
-    model_hf.to("cuda")
-    batch = {k: v.to("cuda") for k,v in batch.items()}
+    if has_gpu():
+        model_archit.to("cuda")
+        model_hf.to("cuda")
+        batch = {k: v.to("cuda") for k,v in batch.items()}
 
     with torch.no_grad():
         logits1 = model_archit(**batch).logits
         logits2 = model_hf(**batch, return_dict=True).logits
         assert torch.all(logits1 == logits2).item()
+        print("CONGRATULATIONS!")
 
 
 def test_robertafordp():
@@ -49,10 +55,11 @@ def test_robertafordp():
     Can you load the DP architecture?
     """
     from archit.instantiation.basemodels import RobertaBaseModel
-    from archit.instantiation.heads import DependencyParsingHeadConfig, PoolingAndStridingConfig
+    from archit.instantiation.heads import BiaffineTokenToTokenHeadConfig, PoolingAndStridingConfig
     from archit.instantiation.tasks import ForDependencyParsing
 
-    model_with_head = ForDependencyParsing.from_pretrained("roberta-base", RobertaBaseModel, DependencyParsingHeadConfig(
+    model_with_head = ForDependencyParsing.from_pretrained("roberta-base", RobertaBaseModel, BiaffineTokenToTokenHeadConfig(
+        num_labels=10,
         extended_model_config=PoolingAndStridingConfig()
     ))
     torchPrint(model_with_head)
@@ -60,5 +67,5 @@ def test_robertafordp():
 
 
 if __name__ == "__main__":
-    # test_equivalence_robertafortokens()
-    test_robertafordp()
+    test_equivalence_robertafortokens()
+    # test_robertafordp()

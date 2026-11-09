@@ -1,36 +1,54 @@
 from dataclasses import dataclass, field
-from typing import Tuple
+from abc import abstractmethod
 
 import torch
 from torch import nn, Tensor
 
-from .abstracts import Head, HeadConfig, Tensors
+from .abstracts import Head, Tensors
+from .configs import *
 from .basemodels import BaseModelConfig, AllHiddenStatesAndPooling
 from .extensions import PoolingAndStridingConfig, flattenNestedBatches
+from .mixins import no_weight_init
 
-__all__ = ["TokenClassificationHead", "TokenClassificationHeadConfig",
-           "SequenceClassificationHead", "SequenceClassificationHeadConfig", "SequenceClassificationHeadForNestedBatches",
-           "MaskedLMHead", "MaskedLMHeadConfig",
-           "CausalLMHead", "CausalLMHeadConfig",
-           "ExtractiveQAHead", "ExtractiveQAHeadConfig",
-           "ExtractiveAQAHead", "ExtractiveAQAHeadConfig",
-           "DependencyParsingHead", "DependencyParsingHeadConfig", "PoolingAndStridingConfig"]
+__all__ = [
+    # Abstract contracts
+    "TokenClassifierHeadConfig",
+    "PooledClassifierHeadConfig",
+    "NestedPooledClassifierHeadConfig",
+    "TokenAndPooledClassifierHeadConfig",
+    "TokenVocabularyHeadConfig",
+    "TokenToTokenHeadConfig",
+    "TokenToTokenClassifierHeadConfig",
+    "TokenToTokenDualHeadsConfig",
+
+    # Concrete implementations
+    "SingleLayerHead",
+    "SingleLayerHeadConfig",
+    "SingleLayerLMHead",
+    "SingleLayerLMHeadConfig",
+    "TwoLayerLMHead",
+    "TwoLayerLMHeadConfig",
+    "TwoLayerPoolingHead",
+    "TwoLayerPoolingHeadConfig",
+    "TwoLayerPoolingHeadForNestedBatches",
+    "OneTokenHeadOnePooledHead",
+    "OneTokenHeadOnePooledHeadConfig",
+    "BiaffineTokenToTokenHead",
+    "BiaffineTokenToTokenHeadConfig",
+    "PoolingAndStridingConfig",
+]
 
 
 @dataclass
-class HeadConfigWithLabels(HeadConfig):
-    """Your IDE might complain about extensions of this class, but due to the kw_only flag, it's all legal."""
-    num_labels: int = field(default=0, kw_only=True)  # It has a default so that users don't have to specify this (tasks automate it).
+class SingleLayerHeadConfig(TokenClassifierHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return SingleLayerHead
 
 
-@dataclass
-class TokenClassificationHeadConfig(HeadConfigWithLabels):
-    pass
+class SingleLayerHead(Head):
 
-
-class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
-
-    def __init__(self, base_config: BaseModelConfig, head_config: TokenClassificationHeadConfig):
+    def __init__(self, base_config: BaseModelConfig, head_config: SingleLayerHeadConfig):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense   = nn.Linear(base_config.hidden_size, head_config.num_labels)
@@ -48,29 +66,23 @@ class TokenClassificationHead(Head[TokenClassificationHeadConfig]):
         return x
 
     @classmethod
-    def configClass(cls):
-        return TokenClassificationHeadConfig
-
-    @classmethod
     def hfEquivalentSuffix(cls) -> str:
-        return "ForTokenClassification"
-
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: TokenClassificationHeadConfig):
-        assert head_config.num_labels > 0
+        return "ForTokenClassification"  # Without dropout, also ForQuestionAnswering.
 
 
 @dataclass
-class SequenceClassificationHeadConfig(HeadConfigWithLabels):
-    pass
+class TwoLayerPoolingHeadConfig(PooledClassifierHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return TwoLayerPoolingHead
 
 
-class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
+class TwoLayerPoolingHead(Head):
     """
     Expects the model to have pooler output. Otherwise, uses mean pooling.
     """
 
-    def __init__(self, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
+    def __init__(self, base_config: BaseModelConfig, head_config: TwoLayerPoolingHeadConfig):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense1  = nn.Linear(base_config.hidden_size, base_config.hidden_size)
@@ -100,19 +112,33 @@ class SequenceClassificationHead(Head[SequenceClassificationHeadConfig]):
         return x
 
     @classmethod
-    def configClass(cls):
-        return SequenceClassificationHeadConfig
-
-    @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForSequenceClassification"
 
+
+@dataclass
+class NestedPooledClassifierHeadConfig(PooledClassifierHeadConfig):
+    """
+    For tasks where examples sent to the model belong together somehow, e.g. (question, option1), (question, option2), ...
+    where each pair is scored with a scalar for how high it is predicted to be along each of K criteria.
+    """
     @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: SequenceClassificationHeadConfig):
-        assert head_config.num_labels > 0
+    def getInputSignature(cls) -> tuple:
+        return ("N1", "N2", "L", "H")
+
+    @classmethod
+    def getOutputSignature(cls) -> tuple:
+        return ("N1", "N2", "K")
 
 
-class SequenceClassificationHeadForNestedBatches(SequenceClassificationHead):
+@dataclass
+class TwoLayerPoolingHeadForNestedBatchesConfig(NestedPooledClassifierHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return TwoLayerPoolingHeadForNestedBatches
+
+
+class TwoLayerPoolingHeadForNestedBatches(TwoLayerPoolingHead):
 
     def forward(
         self,
@@ -139,12 +165,32 @@ class SequenceClassificationHeadForNestedBatches(SequenceClassificationHead):
         return "/"  # ForMultipleChoice uses a linear+dropout head, not a sequence classification head.
 
 
+class _LMHead(Head):
+
+    @abstractmethod
+    def get_embeddings(self) -> nn.Linear:
+        """
+        Returns a reference to the module whose .weight should be reassigned when weight tying is done.
+        """
+        pass
+
+    @abstractmethod
+    def set_embeddings(self, new_embeddings: nn.Linear):
+        """
+        Used when there is no weight tying, but you resize the embedding matrix.
+        modeling_utils will make sure you receive a nn.Linear rather than a Tensor or an nn.Embedding.
+        """
+        pass
+
+
 @dataclass
-class MaskedLMHeadConfig(HeadConfig):
-    tie_weights: bool = False
+class TwoLayerLMHeadConfig(TokenVocabularyHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return TwoLayerLMHead
 
 
-class MaskedLMHead(Head[MaskedLMHeadConfig]):
+class TwoLayerLMHead(_LMHead):
     """
     Based on RoBERTa's LM head.
 
@@ -152,11 +198,11 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
         0.02 / math.sqrt(2 * self.config.num_hidden_layers)
      which is much smaller than the usual 0.02. So, if weight tying is not used, consider using those initial values instead.
 
-    Note: weight tying is enabled in the class that contains the head and the base model, not the head.
+    Note: weight tying is enabled in the class that contains the (head, base model) pair, not the head.
           Hence, no method implementations are dedicated to it here.
     """
 
-    def __init__(self, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
+    def __init__(self, base_config: BaseModelConfig, head_config: TwoLayerLMHeadConfig):
         super().__init__(base_config, head_config)
         self.dense1     = nn.Linear(base_config.hidden_size, base_config.hidden_size)
         self.layer_norm = nn.LayerNorm(base_config.hidden_size, eps=1e-5)
@@ -177,26 +223,29 @@ class MaskedLMHead(Head[MaskedLMHeadConfig]):
         return x
 
     @classmethod
-    def configClass(cls):
-        return MaskedLMHeadConfig
-
-    @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForMaskedLM"
 
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: MaskedLMHeadConfig):
-        pass
+    def get_embeddings(self) -> nn.Linear:
+        return self.dense2
+
+    def set_embeddings(self, new_embeddings: nn.Linear):
+        self.dense2 = new_embeddings
 
 
 @dataclass
-class CausalLMHeadConfig(HeadConfig):
-    tie_weights: bool = False
+class SingleLayerLMHeadConfig(TokenVocabularyHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return SingleLayerLMHead
 
 
-class CausalLMHead(Head[CausalLMHeadConfig]):
+class SingleLayerLMHead(_LMHead):
+    """
+    Based on GPT's LM head.
+    """
 
-    def __init__(self, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
+    def __init__(self, base_config: BaseModelConfig, head_config: SingleLayerLMHeadConfig):
         super().__init__(base_config, head_config)
         self.dense = nn.Linear(base_config.hidden_size, base_config.vocab_size, bias=False)  # GPT, LLaMA, Gemma ... all lack a bias prior, unlike most MLMs. Don't know why.
         self.post_init()
@@ -210,28 +259,48 @@ class CausalLMHead(Head[CausalLMHeadConfig]):
         return self.dense(encoder_output.last_hidden_state)
 
     @classmethod
-    def configClass(cls):
-        return CausalLMHeadConfig
-
-    @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "ForCausalLM"
 
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: CausalLMHeadConfig):
-        pass
+    def get_embeddings(self) -> nn.Linear:
+        return self.dense
+
+    def set_embeddings(self, new_embeddings: nn.Linear):
+        self.dense = new_embeddings
 
 
 @dataclass
-class ExtractiveQAHeadConfig(HeadConfig):
-    pass
+class TokenAndPooledClassifierHeadConfig(HeadConfig):  # Can be implemented as two separately configure heads but also as one very specific very big head, as is the case for BiaffineTokenToTokenHeadConfig extending TokenToTokenDualHeadsConfig.
+    pooled_loss_weight: float
+
+    @classmethod
+    def getInputSignature(cls) -> tuple:
+        return (TokenClassifierHeadConfig.getInputSignature(), PooledClassifierHeadConfig.getInputSignature())  # We steal the signatures despite these classes possibly not being used to build the head.
+
+    @classmethod
+    def getOutputSignature(cls) -> tuple:
+        return (TokenClassifierHeadConfig.getOutputSignature(), PooledClassifierHeadConfig.getOutputSignature())
 
 
-class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
+@dataclass
+class OneTokenHeadOnePooledHeadConfig(TokenAndPooledClassifierHeadConfig):
+    token_head: TokenClassifierHeadConfig
+    pooled_head: PooledClassifierHeadConfig
 
-    def __init__(self, base_config: BaseModelConfig, head_config: ExtractiveQAHeadConfig):
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return OneTokenHeadOnePooledHead
+
+
+class OneTokenHeadOnePooledHead(Head):
+
+    def __init__(self, base_config: BaseModelConfig, head_config: OneTokenHeadOnePooledHeadConfig):
         super().__init__(base_config, head_config)
-        self.dense = nn.Linear(base_config.hidden_size, 2)
+        with no_weight_init():
+            self.first  = head_config.token_head.buildHead(base_config)
+            self.second = head_config.pooled_head.buildHead(base_config)
+            self.qa_heads = nn.Linear(base_config.hidden_size, 2)  # Two linear heads but they're stored as one.
+            self.ua_head  = TwoLayerPoolingHead(base_config, TwoLayerPoolingHeadConfig(num_labels=2))  # Binary classifier.
         self.post_init()
 
     def forward(
@@ -239,58 +308,43 @@ class ExtractiveQAHead(Head[ExtractiveQAHeadConfig]):
         encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,
         **kwargs
-    ) -> Tensor:
-        return self.dense(encoder_output.last_hidden_state)
-
-    @classmethod
-    def configClass(cls):
-        return ExtractiveQAHeadConfig
-
-    @classmethod
-    def hfEquivalentSuffix(cls) -> str:
-        return "ForQuestionAnswering"
-
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: ExtractiveQAHeadConfig):
-        pass
-
-
-@dataclass
-class ExtractiveAQAHeadConfig(HeadConfig):
-   ua_loss_weight: float
-
-
-class ExtractiveAQAHead(Head[ExtractiveAQAHeadConfig]):
-
-    def __init__(self, base_config: BaseModelConfig, head_config: ExtractiveAQAHeadConfig):
-        super().__init__(base_config, head_config)
-        self.qa_heads = nn.Linear(base_config.hidden_size, 2)  # Two linear heads but they're stored as one.
-        self.ua_head  = SequenceClassificationHead(base_config, SequenceClassificationHeadConfig(num_labels=2))  # Binary classifier.
-        self.post_init()
-
-    def forward(
-        self,
-        encoder_output: AllHiddenStatesAndPooling,
-        attention_mask: Tensor,
-        **kwargs
-    ) -> Tuple[Tensor,Tensor]:  # (QA logits, UA logits)
+    ) -> tuple[Tensor,Tensor]:  # (QA logits, UA logits)
         return self.qa_heads(encoder_output.last_hidden_state), self.ua_head(encoder_output.last_hidden_state, attention_mask)
-
-    @classmethod
-    def configClass(cls):
-        return ExtractiveAQAHeadConfig
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
         return "/"
 
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: ExtractiveAQAHeadConfig):
-        pass
+
+@dataclass
+class TokenToTokenHeadConfig(HeadConfig):
+    def getInputSignature(cls) -> tuple:
+        return ("N", "L", "H")
+
+    def getOutputSignature(cls) -> tuple:
+        return ("N", "L", "L")
 
 
 @dataclass
-class DependencyParsingHeadConfig(HeadConfigWithLabels):  # If your IDE complains about this line, update your IDE :)
+class TokenToTokenClassifierHeadConfig(HeadConfigWithLabels):
+    def getInputSignature(cls) -> tuple:
+        return ("N", "L", "H")
+
+    def getOutputSignature(cls) -> tuple:
+        return ("N", "L", "L", "C")
+
+
+@dataclass
+class TokenToTokenDualHeadsConfig(HeadConfigWithLabels):
+    def getInputSignature(cls) -> tuple:
+        return ("N", "L", "H")
+
+    def getOutputSignature(cls) -> tuple:
+        return (("N", "L", "L"), ("N", "L", "L", "C"))
+
+
+@dataclass
+class BiaffineTokenToTokenHeadConfig(TokenToTokenDualHeadsConfig):
     extended_model_config: PoolingAndStridingConfig=field(default_factory=PoolingAndStridingConfig)
 
     final_hidden_size_arcs: int=500
@@ -298,14 +352,25 @@ class DependencyParsingHeadConfig(HeadConfigWithLabels):  # If your IDE complain
     head_dropout: float=0.33  # Dropout after the model and dropout inside the head.
     standardisation_exponent: int=0  # The scores of the biaffine part of the head can be scaled by 1/hidden_size^e with e some exponent. For some reason it must be an int.
 
+    @classmethod
+    def headClass(cls) -> type[Head]:
+        return BiaffineTokenToTokenHead
 
-class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
 
-    def __init__(self, base_config: BaseModelConfig, head_config: DependencyParsingHeadConfig):
+class BiaffineTokenToTokenHead(Head):
+    """
+    Based on supar's Dozat & Manning 2017 implementation.
+    https://arxiv.org/abs/1611.01734
+    """
+
+    def __init__(self, base_config: BaseModelConfig, head_config: BiaffineTokenToTokenHeadConfig):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
 
-        from supar import modules as snn  # DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.
+        from supar import __version__, modules as snn
+        if tuple(map(int, __version__.split("."))) < (1,2,0):
+            raise ImportError("You have the wrong distribution of SuPar. DO NOT use 'pip install supar'. Use 'pip install supar_bauwenst'.")
+
         self.arc_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.arc_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_arcs,      dropout=head_config.head_dropout)
         self.rel_mlp_d = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)
@@ -320,7 +385,7 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
         encoder_output: AllHiddenStatesAndPooling,
         attention_mask: Tensor,  # This is assumed to be at the word level, not token level.
         **kwargs
-    ) -> Tuple[Tensor,Tensor]:
+    ) -> tuple[Tensor,Tensor]:
         x = encoder_output.last_hidden_state  # These are also assumed to be embeddings at the word level.
         x = self.dropout(x)
 
@@ -332,14 +397,6 @@ class DependencyParsingHead(Head[DependencyParsingHeadConfig]):
         s_arc = self.arc_attn(arc_d, arc_h).masked_fill_(~attention_mask.ge(0).unsqueeze(1), -1e32)  # batch_size x seq_len x seq_len
         s_rel = self.rel_attn(rel_d, rel_h).permute(0, 2, 3, 1)                                      # batch_size x seq_len x seq_len x n_rels
         return s_arc, s_rel
-
-    @classmethod
-    def configClass(cls):
-        return DependencyParsingHeadConfig
-
-    @classmethod
-    def assertConfigConstraints(cls, base_config: BaseModelConfig, head_config: DependencyParsingHeadConfig):
-        assert head_config.num_labels > 0
 
 
 class MeanPooler:

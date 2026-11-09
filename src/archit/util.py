@@ -1,10 +1,10 @@
-from typing import Tuple, Dict
 from enum import Enum
 from pathlib import Path
 from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedModel
 
+import inspect
 from dataclasses import fields
 from transformers.utils import cached_file, WEIGHTS_NAME
 from transformers.modeling_utils import load_state_dict
@@ -31,7 +31,7 @@ def torchPrint(module: Module, scaffolding: str=":", truncation_depth: int=100):
     print("\n".join(lines_kept).replace(default_indent, scaffolding + "   "))
 
 
-def parameterCount(model: Module) -> Tuple[int,int]:
+def parameterCount(model: Module) -> tuple[int,int]:
     trainable = 0
     total     = 0
     for p in model.parameters():
@@ -43,13 +43,13 @@ def parameterCount(model: Module) -> Tuple[int,int]:
     return trainable, total
 
 
-def parameterCountBaseVsHead(model: PreTrainedModel) -> Tuple[Tuple[int,int], Tuple[int,int]]:
+def parameterCountBaseVsHead(model: PreTrainedModel) -> tuple[tuple[int,int], tuple[int,int]]:
     base_trainable, base_total = parameterCount(model.base_model)
     all_trainable, all_total   = parameterCount(model)
     return (base_trainable, base_total), (all_trainable - base_trainable, all_total - base_total)
 
 
-def checkpointToStateDict(checkpoint: str) -> Dict[str,Tensor]:
+def checkpointToStateDict(checkpoint: str) -> dict[str,Tensor]:
     """
     Very reduced version of the path resolution logic that happens inside
     transformers.modeling_utils.PreTrainedModel.from_pretrained.
@@ -110,3 +110,38 @@ class classproperty:
 
     def __get__(self, obj, owner):
         return self.func(owner)
+
+
+def is_abstract_method(cls: type, name: str) -> bool:
+    if not name:
+        raise ValueError("Method name cannot be empty.")
+
+    seen: set[int] = set()
+    obj = inspect.getattr_static(cls, name)  # Carefully get the object in the class, without running code, unlike getattr().
+
+    while obj is not None and id(obj) not in seen:
+        seen.add(id(obj))
+
+        if getattr(obj, "__isabstractmethod__", False):
+            return True
+
+        # class body / class dict: @classmethod, @staticmethod
+        if isinstance(obj, (classmethod, staticmethod)):
+            obj = obj.__func__
+            continue
+
+        # @property (+ @abstractmethod on getter)
+        if isinstance(obj, property):
+            obj = obj.fget
+            continue
+
+        # other decorators: functools.wraps, partial stacks, etc.
+        wrapped = getattr(obj, "__wrapped__", None)
+        if wrapped is not None:
+            obj = wrapped
+            continue
+
+        # else: no new object could be found to check.
+        obj = None
+
+    return False

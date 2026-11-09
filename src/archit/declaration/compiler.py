@@ -8,7 +8,6 @@ TODO:
     - Copy .forward() methods from the original classes.
     - Make the "SUFFIX" added to modified classes customisable (e.g. "WithHEL", "WithNILF" and so on).
 """
-from typing import Dict, Set, List, Type
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from torch.nn import Module
@@ -187,7 +186,7 @@ class ModuleListNode(NativeModuleNode):
         return s
 
 
-def getNamedSubmodules(module: Module) -> Dict[str,Module]:
+def getNamedSubmodules(module: Module) -> dict[str,Module]:
     """
     In torch.nn.Module, the __setattr__ method (which is called whenever you assign a field of an object) is overridden
     to divert all assignments of values that themselves have type torch.nn.Module to be added to a dictionary called
@@ -212,7 +211,7 @@ def constructNode(module: Module) -> Node:
         return ModuleNode(module)
 
 
-def printDifference(instance: Module, klass: Type[Module]):
+def printDifference(instance: Module, klass: type[Module]):
     reference_instance = klass(instance.config)
 
     tree1 = constructNode(instance)

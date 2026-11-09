@@ -1,26 +1,25 @@
 """
 Links (1) which head belongs to which task and (2) which loss belongs to which task and how it is computed from logits and labels.
 """
-from typing import Tuple
 import torch
 from torch import Tensor, FloatTensor
 from torch import nn
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss
 
-from .configs import PC
+from .configs import PC, HC
 from .abstracts import *
 from .extensions import ForTokensGroupedByWord, ForNestedBatches
 from .heads import *
+from .heads import _LMHead
 
 
-class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassificationHeadConfig]):
-
-    @classmethod
-    def headClass(cls):
-        return TokenClassificationHead
+class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassifierHeadConfig]):
 
     @classmethod
-    def buildLoss(cls) -> _Loss:
+    def headSignature(cls):
+        return TokenClassifierHeadConfig
+
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -28,17 +27,16 @@ class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassificationHead
         return self.loss_function(logits.view(-1, self.config.head_config.num_labels), labels.view(-1))
 
 
-class ForSingleLabelSequenceClassification(ModelWithHead[PC,SequenceClassificationHeadConfig]):
+class ForSingleLabelSequenceClassification(ModelWithHead[PC,PooledClassifierHeadConfig]):
     """
     For datasets where each example text has one integer as label, between 0 and num_labels-1.
     """
 
     @classmethod
-    def headClass(cls):
-        return SequenceClassificationHead
+    def headSignature(cls):
+        return PooledClassifierHeadConfig
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -46,17 +44,16 @@ class ForSingleLabelSequenceClassification(ModelWithHead[PC,SequenceClassificati
         return self.loss_function(logits.view(-1, self.config.head_config.num_labels), labels.view(-1))  # .view(-1) is equivalent to flattening the tensor, and .view(-1, classes) flattens every dimension except the one at the end that is as big as the amount of classes.
 
 
-class ForMultiLabelSequenceClassification(ModelWithHead[PC,SequenceClassificationHeadConfig]):
+class ForMultiLabelSequenceClassification(ModelWithHead[PC,PooledClassifierHeadConfig]):
     """
     For datasets where each example text has a list of boolean values as label, of length num_labels.
     """
 
     @classmethod
-    def headClass(cls):
-        return SequenceClassificationHead
+    def headSignature(cls):
+        return PooledClassifierHeadConfig
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return BCEWithLogitsLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -64,14 +61,13 @@ class ForMultiLabelSequenceClassification(ModelWithHead[PC,SequenceClassificatio
         return self.loss_function(logits, labels)
 
 
-class ForSequenceRegression(ModelWithHead[PC,SequenceClassificationHeadConfig]):
+class ForSequenceRegression(ModelWithHead[PC,PooledClassifierHeadConfig]):
 
     @classmethod
-    def headClass(cls):
-        return SequenceClassificationHead
+    def headSignature(cls):
+        return PooledClassifierHeadConfig
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return MSELoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -82,14 +78,17 @@ class ForSequenceRegression(ModelWithHead[PC,SequenceClassificationHeadConfig]):
             return self.loss_function(logits, labels)
 
 
-class ForExtractiveQA(ModelWithHead[PC,ExtractiveQAHeadConfig]):
+class ForExtractiveQA(ModelWithHead[PC,TokenClassifierHeadConfig]):
 
     @classmethod
-    def headClass(cls):
-        return ExtractiveQAHead
+    def headSignature(cls):
+        return TokenClassifierHeadConfig
 
     @classmethod
-    def buildLoss(cls) -> _Loss:
+    def adjustHeadConfig(cls, head_config: TokenClassifierHeadConfig):
+        head_config.num_labels = 2
+
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -119,25 +118,25 @@ class ForExtractiveQA(ModelWithHead[PC,ExtractiveQAHeadConfig]):
         return (start_loss + end_loss) / 2
 
 
-class ForExtractiveAQA(ModelWithHead[PC,ExtractiveAQAHeadConfig]):
+class ForExtractiveAQA(ModelWithHead[PC,OneTokenHeadOnePooledHeadConfig]):
     """
     Architecture for the task of predicting whether a given question can be answered given a context,
     and if so, which span of the context contains the answer.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,ExtractiveAQAHeadConfig], model: BaseModel[PC], head: Head[ExtractiveAQAHeadConfig], loss: _Loss):
-        super().__init__(combined_config=combined_config, model=model, head=head, loss=loss)
-        self.λ = combined_config.head_config.ua_loss_weight
+    @classmethod
+    def headSignature(cls):
+        return OneTokenHeadOnePooledHeadConfig
 
     @classmethod
-    def headClass(cls):
-        return ExtractiveAQAHead
+    def adjustHeadConfig(cls, head_config: OneTokenHeadOnePooledHeadConfig):
+        head_config.token_head.num_labels  = 2
+        head_config.pooled_head.num_labels = 2
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
-    def computeLoss(self, logits: Tuple[Tensor,Tensor], labels: Tuple[Tensor,Tensor]) -> FloatTensor:
+    def computeLoss(self, logits: tuple[Tensor,Tensor], labels: tuple[Tensor,Tensor]) -> FloatTensor:
         # The head always produces both QA and unanswerability (UA) logits for all examples, but:
         #   - The thresholded prediction of whether each example is answerable according to the model has NO influence
         #     on the outcome of this method. Downstream code may want to prevent doing QA for examples that are predicted
@@ -194,7 +193,7 @@ class ForExtractiveAQA(ModelWithHead[PC,ExtractiveAQAHeadConfig]):
 
         # 3. Compose the losses.
         if qa_loss is not None and ua_loss is not None:
-            total_loss = qa_loss + self.λ*ua_loss
+            total_loss = qa_loss + self.config.head_config.pooled_loss_weight * ua_loss
         elif qa_loss is not None:
             total_loss = qa_loss
         elif ua_loss is not None:
@@ -205,7 +204,7 @@ class ForExtractiveAQA(ModelWithHead[PC,ExtractiveAQAHeadConfig]):
         return total_loss
 
 
-class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHeadConfig]):
+class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,PooledClassifierHeadConfig]):
     """
     Architecture for tasks of the form (question, answer1, answer2, ...) which sends each question-answer pair through
     the model like
@@ -226,18 +225,16 @@ class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHe
                                       the true answers. Gradient descent would be the same as BCE loss; metrics would be different.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,SequenceClassificationHeadConfig], model: BaseModel[PC], head: Head[SequenceClassificationHeadConfig], loss: _Loss):
-        super().__init__(combined_config=combined_config, model=model, head=head, loss=loss)
-        assert isinstance(head, SequenceClassificationHeadForNestedBatches)  # This is already asserted by the constructor. We do it here just for type checking.
-        if head.dense2.weight.shape[0] != 1:  # Note that nn.Linear stores weights in the form out x in.
+    @classmethod
+    def headSignature(cls):
+        return TwoLayerPoolingHeadForNestedBatches
+
+    @classmethod
+    def adjustHeadConfig(cls, head_config: PooledClassifierHeadConfig):
+        if head_config.num_labels != 1:
             raise NotImplementedError("Although multi-task multiple choice is technically possible, it isn't supported currently.")
 
-    @classmethod
-    def headClass(cls):
-        return SequenceClassificationHeadForNestedBatches
-
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
@@ -250,15 +247,42 @@ class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,SequenceClassificationHe
         return self.loss_function(logits, labels)
 
 
-class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
+class _ForLanguageModelling(ModelWithHead[PC,TokenVocabularyHeadConfig]):
 
     @classmethod
-    def headClass(cls):
-        return CausalLMHead
+    def headSignature(cls):
+        return TokenVocabularyHeadConfig
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
+
+    # Override PretrainedModel instance methods to support weight tying. We do it here because ModelWithHead has access to both the base model and the head.
+
+    def get_expanded_tied_weights_keys(self, all_submodels: bool=False) -> dict[str,str]:  # We implement tied weights by dynamically looking up the output and input embeddings.
+        if all_submodels:  # Recursive case
+            return super().get_expanded_tied_weights_keys(all_submodels=all_submodels)
+        else:  # Base case
+            if self.config.head_config.tie_to_model:  # Finally, the generics system pays off.
+                return {self._get_name_of_module(self.get_output_embeddings()): self._get_name_of_module(self.get_input_embeddings())}
+            else:
+                return {}
+
+    def get_input_embeddings(self) -> nn.Module:
+        return super().get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Module):
+        super().set_input_embeddings(value)
+
+    def get_output_embeddings(self) -> nn.Linear:
+        assert isinstance(self.head, _LMHead)
+        return self.head.get_embeddings()
+
+    def set_output_embeddings(self, new_embeddings: nn.Linear):
+        assert isinstance(self.head, _LMHead)
+        self.head.set_embeddings(new_embeddings)
+
+
+class ForCausalLM(_ForLanguageModelling[PC]):
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
@@ -268,54 +292,15 @@ class ForCausalLM(ModelWithHead[PC,CausalLMHeadConfig]):
         shifted_labels = labels[:, 1:].contiguous()
         return self.loss_function(shifted_logits.view(-1, self.config.base_model_config.vocab_size), shifted_labels.view(-1))
 
-    def tie_weights(self):
-        if self.config.head_config.tie_weights:
-            self._tie_or_clone_weights(self.get_output_embeddings(), self.get_input_embeddings())
 
-    def get_output_embeddings(self) -> nn.Linear:
-        assert isinstance(self.head, CausalLMHead)
-        return self.head.dense
-
-    def set_output_embeddings(self, new_embeddings: nn.Linear):
-        assert isinstance(self.head, CausalLMHead)
-        self.head.dense = new_embeddings
-
-
-class ForMaskedLM(ModelWithHead[PC,MaskedLMHeadConfig]):
-
-    @classmethod
-    def headClass(cls):
-        return MaskedLMHead
-
-    @classmethod
-    def buildLoss(cls) -> _Loss:
-        return CrossEntropyLoss()
+class ForMaskedLM(_ForLanguageModelling[PC]):
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
         return self.loss_function(logits.view(-1, self.config.base_model_config.vocab_size), labels.view(-1))
 
-    def tie_weights(self):
-        if self.config.head_config.tie_weights:  # Finally, the generics system pays off.
-            self._tie_or_clone_weights(self.get_output_embeddings(), self.get_input_embeddings())
 
-    def get_output_embeddings(self) -> nn.Linear:
-        """
-        Returns a reference to the module whose .weight should be reassigned when weight tying is done.
-        """
-        assert isinstance(self.head, MaskedLMHead)
-        return self.head.dense2
-
-    def set_output_embeddings(self, new_embeddings: nn.Linear):
-        """
-        Used when there is no weight tying, but you resize the embedding matrix.
-        modeling_utils will make sure you receive a nn.Linear rather than a Tensor or an nn.Embedding.
-        """
-        assert isinstance(self.head, MaskedLMHead)
-        self.head.dense2 = new_embeddings
-
-
-class ForDependencyParsing(ForTokensGroupedByWord[PC, DependencyParsingHeadConfig]):
+class ForDependencyParsing(ForTokensGroupedByWord[PC,TokenToTokenDualHeadsConfig]):
     """
     For the task of dependency parsing, based on Supar.
 
@@ -324,18 +309,17 @@ class ForDependencyParsing(ForTokensGroupedByWord[PC, DependencyParsingHeadConfi
         2. The forward() method returns logits and no loss. It has a separate method for loss which is called by its users, which is not how you do that.
     """
 
-    def __init__(self, combined_config: CombinedConfig[PC,DependencyParsingHeadConfig], model: BaseModel[PC], head: Head[DependencyParsingHeadConfig], loss: _Loss):
-        super().__init__(combined_config, combined_config.head_config.extended_model_config, model, head, loss)
+    def __init__(self, combined_config: ArchitConfig[PC,TokenToTokenDualHeadsConfig], base_model_class: type[BaseModel[PC]]):
+        super().__init__(combined_config, combined_config.head_config.extended_model_config, base_model_class)  # TODO: Yeah that's kind of a problem
 
     @classmethod
-    def headClass(cls):
-        return DependencyParsingHead
+    def headSignature(cls):
+        return TokenToTokenDualHeadsConfig
 
-    @classmethod
-    def buildLoss(cls) -> _Loss:
+    def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
 
-    def computeLoss(self, logits: Tuple[Tensor,Tensor], labels: Tuple[Tensor,Tensor]) -> FloatTensor:
+    def computeLoss(self, logits: tuple[Tensor,Tensor], labels: tuple[Tensor,Tensor]) -> FloatTensor:
         arc_scores, rel_scores = logits
         arc_labels, rel_labels = labels
 
