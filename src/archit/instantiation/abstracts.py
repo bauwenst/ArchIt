@@ -222,7 +222,7 @@ class Head(HuggingfaceInitialisationMixin):
         class suffix always implies the presence of the same head. The equivalence between ArchIt's model+head and
         HuggingFace's model+head architectures is less precise because ArchIt separates out tasks that still use the same head.
         """
-        return "/"
+        return ""
 
 
 @dataclass

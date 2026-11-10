@@ -1,3 +1,10 @@
+"""
+Defines head signatures and head architectures that satisfy them.
+
+Note: our design policy is that if your task needs an existing head architecture but with a fixed output dimension, you
+      do not create a new architecture and config for it, but rather let the task adjust the config's n_classes field.
+      This prevents a needless explosion of architectures and combined architectures.
+"""
 from dataclasses import dataclass, field
 from abc import abstractmethod
 
@@ -51,7 +58,7 @@ class SingleLayerHead(Head):
     def __init__(self, base_config: BaseModelConfig, head_config: SingleLayerHeadConfig):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
-        self.dense   = nn.Linear(base_config.hidden_size, head_config.num_labels)
+        self.dense   = nn.Linear(base_config.hidden_size, head_config.n_classes)
         self.post_init()
 
     def forward(
@@ -86,7 +93,7 @@ class TwoLayerPoolingHead(Head):
         super().__init__(base_config, head_config)
         self.dropout = nn.Dropout(base_config.hidden_dropout_prob)
         self.dense1  = nn.Linear(base_config.hidden_size, base_config.hidden_size)
-        self.dense2  = nn.Linear(base_config.hidden_size, head_config.num_labels)
+        self.dense2  = nn.Linear(base_config.hidden_size, head_config.n_classes)
 
         self.pooler = MeanPooler()
         self.post_init()
@@ -162,7 +169,7 @@ class TwoLayerPoolingHeadForNestedBatches(TwoLayerPoolingHead):
 
     @classmethod
     def hfEquivalentSuffix(cls) -> str:
-        return "/"  # ForMultipleChoice uses a linear+dropout head, not a sequence classification head.
+        return ""  # ForMultipleChoice uses a single-layer head, not a two-layer head.
 
 
 class _LMHead(Head):
@@ -300,7 +307,7 @@ class OneTokenHeadOnePooledHead(Head):
             self.first  = head_config.token_head.buildHead(base_config)
             self.second = head_config.pooled_head.buildHead(base_config)
             self.qa_heads = nn.Linear(base_config.hidden_size, 2)  # Two linear heads but they're stored as one.
-            self.ua_head  = TwoLayerPoolingHead(base_config, TwoLayerPoolingHeadConfig(num_labels=2))  # Binary classifier.
+            self.ua_head  = TwoLayerPoolingHead(base_config, TwoLayerPoolingHeadConfig(n_classes=2))  # Binary classifier.
         self.post_init()
 
     def forward(
@@ -310,10 +317,6 @@ class OneTokenHeadOnePooledHead(Head):
         **kwargs
     ) -> tuple[Tensor,Tensor]:  # (QA logits, UA logits)
         return self.qa_heads(encoder_output.last_hidden_state), self.ua_head(encoder_output.last_hidden_state, attention_mask)
-
-    @classmethod
-    def hfEquivalentSuffix(cls) -> str:
-        return "/"
 
 
 @dataclass
@@ -377,7 +380,7 @@ class BiaffineTokenToTokenHead(Head):
         self.rel_mlp_h = snn.MLP(n_in=base_config.hidden_size, n_out=head_config.final_hidden_size_relations, dropout=head_config.head_dropout)
 
         self.arc_attn = snn.Biaffine(n_in=head_config.final_hidden_size_arcs, scale=head_config.standardisation_exponent, bias_x=True, bias_y=False)
-        self.rel_attn = snn.Biaffine(n_in=head_config.final_hidden_size_relations, n_out=head_config.num_labels, bias_x=True, bias_y=True)
+        self.rel_attn = snn.Biaffine(n_in=head_config.final_hidden_size_relations, n_out=head_config.n_classes, bias_x=True, bias_y=True)
         self.post_init()
 
     def forward(

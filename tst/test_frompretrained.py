@@ -18,7 +18,8 @@ def test_equivalence_robertafortokens():
     from archit.instantiation.basemodels import RobertaBaseModel
     from archit.instantiation.tasks import ForSingleLabelTokenClassification, SingleLayerHeadConfig
 
-    model_archit = ForSingleLabelTokenClassification.from_pretrained("roberta-base", RobertaBaseModel, SingleLayerHeadConfig(num_labels=19))
+    model_archit = ForSingleLabelTokenClassification.from_pretrained("roberta-base", RobertaBaseModel, SingleLayerHeadConfig(
+        n_classes=19))
     model_hf     = AutoModelForTokenClassification.from_pretrained("roberta-base", num_labels=19)
 
     # First of all: check that the encoders are equal.
@@ -59,7 +60,7 @@ def test_robertafordp():
     from archit.instantiation.tasks import ForDependencyParsing
 
     model_with_head = ForDependencyParsing.from_pretrained("roberta-base", RobertaBaseModel, BiaffineTokenToTokenHeadConfig(
-        num_labels=10,
+        n_classes=10,
         extended_model_config=PoolingAndStridingConfig()
     ))
     torchPrint(model_with_head)

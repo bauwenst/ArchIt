@@ -6,11 +6,14 @@ from torch import Tensor, FloatTensor
 from torch import nn
 from torch.nn.modules.loss import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss, _Loss
 
-from .configs import PC, HC
+from .configs import PC, HeadConfigWithLabels
 from .abstracts import *
 from .extensions import ForTokensGroupedByWord, ForNestedBatches
 from .heads import *
-from .heads import _LMHead
+
+
+def CrossEntropyLoss_PotentiallyWeighted(config: HeadConfigWithLabels) -> CrossEntropyLoss:
+    return CrossEntropyLoss(weight=None if config.label_loss_weights is None else torch.tensor(config.label_loss_weights, dtype=torch.float32) / sum(config.label_loss_weights))
 
 
 class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassifierHeadConfig]):
@@ -20,16 +23,16 @@ class ForSingleLabelTokenClassification(ModelWithHead[PC,TokenClassifierHeadConf
         return TokenClassifierHeadConfig
 
     def buildLoss(self) -> _Loss:
-        return CrossEntropyLoss()
+        return CrossEntropyLoss_PotentiallyWeighted(self.config.head_config)
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
-        return self.loss_function(logits.view(-1, self.config.head_config.num_labels), labels.view(-1))
+        return self.loss_function(logits.view(-1, self.config.head_config.n_classes), labels.view(-1))
 
 
 class ForSingleLabelSequenceClassification(ModelWithHead[PC,PooledClassifierHeadConfig]):
     """
-    For datasets where each example text has one integer as label, between 0 and num_labels-1.
+    For datasets where each example text has one integer as label, between 0 and n_classes-1.
     """
 
     @classmethod
@@ -37,16 +40,16 @@ class ForSingleLabelSequenceClassification(ModelWithHead[PC,PooledClassifierHead
         return PooledClassifierHeadConfig
 
     def buildLoss(self) -> _Loss:
-        return CrossEntropyLoss()
+        return CrossEntropyLoss_PotentiallyWeighted(self.config.head_config)
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
-        return self.loss_function(logits.view(-1, self.config.head_config.num_labels), labels.view(-1))  # .view(-1) is equivalent to flattening the tensor, and .view(-1, classes) flattens every dimension except the one at the end that is as big as the amount of classes.
+        return self.loss_function(logits.view(-1, self.config.head_config.n_classes), labels.view(-1))  # .view(-1) is equivalent to flattening the tensor, and .view(-1, classes) flattens every dimension except the one at the end that is as big as the amount of classes.
 
 
 class ForMultiLabelSequenceClassification(ModelWithHead[PC,PooledClassifierHeadConfig]):
     """
-    For datasets where each example text has a list of boolean values as label, of length num_labels.
+    For datasets where each example text has a list of boolean values as label, of length n_classes.  TODO: n_classes is semantically not an n_labels.
     """
 
     @classmethod
@@ -72,7 +75,7 @@ class ForSequenceRegression(ModelWithHead[PC,PooledClassifierHeadConfig]):
 
     def computeLoss(self, logits: Tensor, labels: Tensor) -> FloatTensor:
         labels = labels.to(logits.device)
-        if self.config.head_config.num_labels == 1:  # MISO regression. Label is just a number 4.20, and if it's a one-number list [4.20], we squeeze away that list dimension.
+        if self.config.head_config.n_classes == 1:  # MISO regression. Label is just a number 4.20, and if it's a one-number list [4.20], we squeeze away that list dimension.
             return self.loss_function(logits.squeeze(), labels.squeeze())
         else:  # MIMO regression. Label is a list [4.20, 6.90]. (Technically you could also squeeze these, since it won't do anything. Not sure why HF separates these two cases.)
             return self.loss_function(logits, labels)
@@ -86,7 +89,7 @@ class ForExtractiveQA(ModelWithHead[PC,TokenClassifierHeadConfig]):
 
     @classmethod
     def adjustHeadConfig(cls, head_config: TokenClassifierHeadConfig):
-        head_config.num_labels = 2
+        head_config.n_classes = 2
 
     def buildLoss(self) -> _Loss:
         return CrossEntropyLoss()
@@ -130,19 +133,21 @@ class ForExtractiveAQA(ModelWithHead[PC,OneTokenHeadOnePooledHeadConfig]):
 
     @classmethod
     def adjustHeadConfig(cls, head_config: OneTokenHeadOnePooledHeadConfig):
-        head_config.token_head.num_labels  = 2
-        head_config.pooled_head.num_labels = 2
+        head_config.token_head.n_classes  = 2
+        head_config.pooled_head.n_classes = 2
 
-    def buildLoss(self) -> _Loss:
-        return CrossEntropyLoss()
+    def buildLoss(self) -> tuple[_Loss,_Loss]:
+        return CrossEntropyLoss(), \
+               CrossEntropyLoss_PotentiallyWeighted(self.config.head_config.pooled_head)
 
     def computeLoss(self, logits: tuple[Tensor,Tensor], labels: tuple[Tensor,Tensor]) -> FloatTensor:
+        qa_loss_function, ua_loss_function = self.loss_function
+
         # The head always produces both QA and unanswerability (UA) logits for all examples, but:
         #   - The thresholded prediction of whether each example is answerable according to the model has NO influence
         #     on the outcome of this method. Downstream code may want to prevent doing QA for examples that are predicted
         #     to be UA, but that prediction has no power here.
         #   - The hard UA labels are used for UA loss AND are used to decide which QA logits are counted towards QA loss.
-
         # Disentangle QA and UA
         qa_logits, ua_logits = logits  # qa_logits is B x L x 2 (equivalent of B x L and B x L) where the last dimension has a logit for a token being the start and the end, each separately normalised across L. ua_logits is B x 2, normalised across that 2.
         qa_labels, ua_labels = labels  # qa_labels is B x 2 (equivalent of B x 1 and B x 1). ua_labels is B x 1.
@@ -180,16 +185,16 @@ class ForExtractiveAQA(ModelWithHead[PC,OneTokenHeadOnePooledHeadConfig]):
             end_positions   = end_positions  .clamp(0, L)
 
             # Get loss as average of start and end loss
-            self.loss_function.ignore_index = L
-            start_loss = self.loss_function(start_logits, start_positions)
-            end_loss   = self.loss_function(end_logits, end_positions)
+            qa_loss_function.ignore_index = L
+            start_loss = qa_loss_function(start_logits, start_positions)
+            end_loss   = qa_loss_function(end_logits, end_positions)
             qa_loss = (start_loss + end_loss)/2
-            self.loss_function.ignore_index = -100
+            qa_loss_function.ignore_index = -100
 
         # 2. UA loss
         ua_loss = None
         if ua_labels is not None:
-            ua_loss = self.loss_function(ua_logits.view(-1, 2), ua_labels.long().view(-1))
+            ua_loss = ua_loss_function(ua_logits.view(-1, 2), ua_labels.long().view(-1))
 
         # 3. Compose the losses.
         if qa_loss is not None and ua_loss is not None:
@@ -231,7 +236,7 @@ class ForSingleAnswerMultipleChoice(ForNestedBatches[PC,PooledClassifierHeadConf
 
     @classmethod
     def adjustHeadConfig(cls, head_config: PooledClassifierHeadConfig):
-        if head_config.num_labels != 1:
+        if head_config.n_classes != 1:
             raise NotImplementedError("Although multi-task multiple choice is technically possible, it isn't supported currently.")
 
     def buildLoss(self) -> _Loss:
@@ -274,10 +279,12 @@ class _ForLanguageModelling(ModelWithHead[PC,TokenVocabularyHeadConfig]):
         super().set_input_embeddings(value)
 
     def get_output_embeddings(self) -> nn.Linear:
+        from .heads import _LMHead
         assert isinstance(self.head, _LMHead)
         return self.head.get_embeddings()
 
     def set_output_embeddings(self, new_embeddings: nn.Linear):
+        from .heads import _LMHead
         assert isinstance(self.head, _LMHead)
         self.head.set_embeddings(new_embeddings)
 
@@ -317,7 +324,7 @@ class ForDependencyParsing(ForTokensGroupedByWord[PC,TokenToTokenDualHeadsConfig
         return TokenToTokenDualHeadsConfig
 
     def buildLoss(self) -> _Loss:
-        return CrossEntropyLoss()
+        return CrossEntropyLoss_PotentiallyWeighted(self.config.head_config)
 
     def computeLoss(self, logits: tuple[Tensor,Tensor], labels: tuple[Tensor,Tensor]) -> FloatTensor:
         arc_scores, rel_scores = logits

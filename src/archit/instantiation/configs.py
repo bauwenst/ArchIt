@@ -2,7 +2,7 @@
 Defines the three config objects for ArchIt's three main classes.
 """
 from __future__ import annotations
-from typing import TypeVar, Generic, Union, Protocol, Any, TYPE_CHECKING
+from typing import TypeVar, Generic, Union, Protocol, Any, TYPE_CHECKING, Optional
 from typing_extensions import Self, runtime_checkable
 from abc import abstractmethod, ABC, ABCMeta
 from dataclasses import dataclass, field
@@ -38,13 +38,14 @@ class BaseModelConfig:
     context_length: int
 
 
-@runtime_checkable
-class Dictable(Protocol):
+class Dictable(ABC):
     """Anything that has a method to_dict() for being turned into a dictionary. Due to duck typing, this includes PreTrainedConfig."""
+    @abstractmethod
     def to_dict(self) -> dict:
         pass
 
     @classmethod
+    @abstractmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         pass
 
@@ -169,8 +170,8 @@ class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, Recursi
         if not json_dict:  # Since HF won't raise an error when the checkpoint literally doesn't fucking exist, we will.
             raise FileNotFoundError(f"No model config was found for checkpoint '{pretrained_model_name_or_path}'.")
 
-        kwargs_to_add_to_dict = cls._constructor_runtime_arguments()
-        for key in kwargs_to_add_to_dict:
+        # Go through the kwargs and move any keys you recognise to the main dict. THIS WILL OVERRIDE the values of those keys coming from the JSON!
+        for key in cls._constructor_runtime_arguments():
             if key in remaining_kwargs:
                 json_dict[key] = remaining_kwargs.pop(key)
 
@@ -210,18 +211,18 @@ class _TensorSignatureABCMeta(ABCMeta):
     Enforces that headClass() must be defined only after defining getInputSignature() and getOutputSignature().
     """
     def __new__(mcs, name, bases, namespace, **kwargs):  # Runs when a subclass is declared.
-        cls = super().__new__(mcs, name, bases, namespace, **kwargs)  # namespace is the code written in the specific subclass.
+        __cls = super().__new__(mcs, name, bases, namespace, **kwargs)  # namespace is the code written in the specific subclass.
 
         # Now that the class exists, we can check method order.
-        earlier_methods = ["getInputSignature", "getOutputSignature"]
-        later_method = "headClass"
-        if later_method in namespace and not is_abstract_method(cls, later_method):  # => This class defines it concretely.
-            if any(m in namespace for m in earlier_methods):
+        __earlier_methods = ["getInputSignature", "getOutputSignature"]
+        __later_method = "headClass"
+        if __later_method in namespace and not is_abstract_method(__cls, __later_method):  # => This class defines it concretely.
+            if any(m in namespace for m in __earlier_methods):
                 raise TypeError("Cannot define tensor signature (which is true for many head classes) at the same time as the head class itself. Do this in a parent class.")
-            elif any(is_abstract_method(cls, m) for m in earlier_methods):  # If this check raises an AttributeError, you have put the metaclass on a class that does not even define abstractly define the earlier methods, which is bad.
+            elif any(is_abstract_method(__cls, m) for m in __earlier_methods):  # If this check raises an AttributeError, you have put the metaclass on a class that does not even define abstractly define the earlier methods, which is bad.
                 raise TypeError(f"Cannot define head class when tensor signature methods aren't implemented yet. (Do that in a parent class.)")
 
-        return cls
+        return __cls
 
 
 class TensorSignature(metaclass=_TensorSignatureABCMeta):
@@ -272,10 +273,19 @@ class HeadConfig(RecursiveSerialisable, TensorSignature):
 
 @dataclass
 class HeadConfigWithLabels(HeadConfig):   # Your IDE might complain about extensions of this class, but due to the kw_only flag, it's all legal.
-    num_labels: int = field(default=0, kw_only=True)  # It has a default so that users don't have to specify this (tasks automate it).
+    n_classes: int = field(default=0, kw_only=True)  # It has a default so that users don't have to specify this (tasks automate it).
+    label_loss_weights: Optional[list[float]] = None
 
     def assertConstraints(self):
-        assert self.num_labels > 0
+        assert self.n_classes > 0
+        if self.label_loss_weights is not None:
+            assert all(weight >= 0 for weight in self.label_loss_weights)
+            assert len(self.label_loss_weights) == self.n_classes
+
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        if "num_labels" in data:  # num_labels was grandfathered in from HF, but it is a misnomer because single-label classification has num_labels > 1.
+            data["n_classes"] = data["num_labels"]
+        return super().from_dict(data)
 
 
 @dataclass
@@ -336,21 +346,28 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
         """
         super().__init__(**kwargs)
 
-        # Catch cases where the arguments are coming from a JSON for e.g. RobertaConfig rather than an ArchitConfig.
-        if base_model_config is None:
-            if head_config is None:
-                raise ValueError("When you unpack a PreTrainedConfig and give the result to the constructor of an ArchitConfig, you should also supply a HeadConfig as an extra argument.")
+        if head_config is None:
+            raise ValueError("Missing head information. Provide it either as a dictionary (with a class) or as a HeadConfig object.")
+        if base_model_config_class is None and isinstance(base_model_config, dict):
+            raise ValueError("Cannot parse base model subconfig without base_model_config_class.")
+        if head_config_class is None and isinstance(head_config, dict):
+            raise ValueError("Cannot parse head subconfig without head_config_class.")
+
+        # Base config
+        if base_model_config is None:  # => Information must be in kwargs, coming from e.g. RobertaConfig checkpoint rather than an ArchitConfig.
             base_model_config: PC = base_model_config_class.from_dict(kwargs)
         else:
-            assert head_config is not None, "Unpacked an ArchitConfig but it was missing a head config without missing a base model config... That's impossible."
             if isinstance(base_model_config, dict):
                 base_model_config: PC = base_model_config_class.from_dict(base_model_config)
             else:
                 base_model_config_class = base_model_config.__class__
 
+        # Head config
         if isinstance(head_config, dict):  # Deserialise head. Its class has to be known for this.
             head_config: HC = head_config_class.from_dict(head_config)
-        else:  # Head is already deserialised. We can impute its class.
+        else:  # Head is already deserialised. This happens when manually calling this constructor with a head config (e.g. from LaMoTO hyperparameters), but also during .from_pretrained() with kwargs that overwrite the deserialised dictionary.
+            if head_config_class is not None and head_config_class != type(head_config):
+                raise ValueError(f"Mismatch between class of given head config ({type(head_config).__name__}) and given head config class ({head_config_class.__name__}).")
             head_config_class = head_config.__class__
 
         assert isinstance(base_model_config, base_model_config_class)
@@ -383,3 +400,9 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
 
     def _syncSubconfigs(self):
         pass
+
+    @classmethod
+    def isNativeArchit(cls, checkpoint: str) -> bool:
+        """Checks whether a pretrained checkpoint is an ArchIt checkpoint. Throws an error if the checkpoint doesn't exist."""
+        raw = cls.get_config_dict(checkpoint)
+        return all(field in raw for field in cls._serialised_fields())
