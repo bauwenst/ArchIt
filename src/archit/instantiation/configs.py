@@ -115,7 +115,7 @@ class RecursiveAccessible(ABC):
             else:
                 raise AttributeError(item)
 
-    def __delattr__(self, item):  # Deletes one, not all instances, just like __getattr__ returns only the first instance.
+    def __delattr__(self, item):  # Deletes one, not all instances, just like __getattr__ returns only the first instance. NOTE: Better not delete a dataclass attribute. It has unexpected behaviour.
         try:
             return super().__delattr__(item)
         except AttributeError:
@@ -393,10 +393,10 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
             tied_weights_requested_base = base_model_config.tie_word_embeddings
             if isinstance(head_config, HeadConfigWithModelTying):
                 if tied_weights_requested_base ^ head_config.tie_to_model:
-                    raise ValueError(f"Head weights should{' ' if tied_weights_requested_base else ' not'} be tied according to the base model config (tie_word_embeddings), which contradicts the head config. Fix this mismatch.")
+                    raise ValueError(f"Head weights should{' ' if tied_weights_requested_base else ' not '}be tied according to the base model config (tie_word_embeddings), which contradicts the head config. Fix this mismatch.")
             else:
                 pass  # This is probably quite normal during finetuning, so we don't raise an error nor a warning.
-            delattr(base_model_config, "tie_word_embeddings")
+            # delattr(base_model_config, "tie_word_embeddings")  # This is unnecessary and also buggy, because in dataclasses you just reset the field to its default value.
 
         self.base_model_config: PC = base_model_config
         self.head_config: HC       = head_config
