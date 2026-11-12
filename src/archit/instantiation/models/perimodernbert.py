@@ -150,8 +150,8 @@ class PeriModernBertAttention(ModernBertAttention):
     ModernBERT's MLP respects this. Its attention does not. Hence we redefine its dropout away.
     """
 
-    def __init__(self, config: PeriModernBertConfig, layer_id: int):
-        super().__init__(config, layer_id=layer_id)
+    def __init__(self, config: PeriModernBertConfig, layer_idx: int):
+        super().__init__(config, layer_idx=layer_idx)
         self.out_drop = nn.Identity()
         self.attention_dropout = config.softmax_dropout  # HF's software design practices are super shady, but basically the SDPA implementation accesses this field on this nn.Module to get the softmax dropout probability. In ModernBertAttention, the config field used for this is the SAME FIELD as is used for the attention block's output dropout, which makes no sense since they have wildly different effects.
 
@@ -161,12 +161,12 @@ class PeriModernBertEncoderLayer(nn.Module):
     Encoder for ModernBERT but with peri-norming (and associated dropout) before the residual.
     """
 
-    def __init__(self, config: PeriModernBertConfig, layer_id: Optional[int] = None):
+    def __init__(self, config: PeriModernBertConfig, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
 
         self.pre_norm_att  = PeriModernBertNorm(config)
-        self.attn          = PeriModernBertAttention(config, layer_id=layer_id)
+        self.attn          = PeriModernBertAttention(config, layer_idx=layer_idx)
         self.post_norm_att = PeriModernBertNorm(config)
         self.dropout_att   = nn.Dropout(config.attention_dropout)
 
@@ -250,7 +250,7 @@ class PeriModernBertModel(PeriModernBertPretrainedModel, ModernBertModel):  # In
         ModernBertModel.__init__(self, config)  # This sets some modules and initialises them, but we will overwrite them and just re-initialise (random is random).
         self.embeddings = EmbeddingDropout(config.vocab_size, config.hidden_size, config.pad_token_id, config.embedding_dropout, config.norm_type, config.norm_eps, config.norm_bias)
         self.layers = nn.ModuleList(
-            [PeriModernBertEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)]
+            [PeriModernBertEncoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.final_norm = PeriModernBertNorm(config)
         self.post_init()
@@ -260,37 +260,3 @@ class PeriModernBertModel(PeriModernBertPretrainedModel, ModernBertModel):  # In
 
     # def set_input_embeddings(self, value: nn.Embedding):
     #     self.embeddings.matrix = value
-
-    # Added **kwargs to catch unexpected arguments.
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        indices: Optional[torch.Tensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        seq_len: Optional[int] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        **kwargs
-    ) -> tuple[torch.Tensor, ...]:
-        return super().forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            sliding_window_mask=sliding_window_mask,
-            position_ids=position_ids,
-            inputs_embeds=inputs_embeds,
-            indices=indices,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            batch_size=batch_size,
-            seq_len=seq_len,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict
-        )
