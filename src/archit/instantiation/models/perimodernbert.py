@@ -71,6 +71,7 @@ class PeriModernBertConfig(ModernBertConfig):
 
         # Normally a kwarg, but we add it explicitly to the interface.
         attn_implementation: Literal["sdpa", "flash_attention_2"]="sdpa",
+        tie_word_embeddings: bool=True,
 
         **kwargs
     ):

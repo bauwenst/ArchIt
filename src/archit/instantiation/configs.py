@@ -115,6 +115,21 @@ class RecursiveAccessible(ABC):
             else:
                 raise AttributeError(item)
 
+    def __delattr__(self, item):  # Deletes one, not all instances, just like __getattr__ returns only the first instance.
+        try:
+            return super().__delattr__(item)
+        except AttributeError:
+            for fallback in self._fallback_fields():
+                if fallback not in self.__dict__:
+                    continue
+                try:
+                    obj = getattr(self, fallback)
+                    return delattr(obj, item)
+                except AttributeError:
+                    pass
+            else:
+                raise AttributeError(item)
+
 
 class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, RecursiveAccessible, ABC):
     """
@@ -378,7 +393,7 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
             tied_weights_requested_base = base_model_config.tie_word_embeddings
             if isinstance(head_config, HeadConfigWithModelTying):
                 if tied_weights_requested_base ^ head_config.tie_to_model:
-                    raise ValueError(f"Head weights should {'' if tied_weights_requested_base else 'not'} be tied according to the base model config (tie_word_embeddings), which contradicts the head config. Fix this mismatch.")
+                    raise ValueError(f"Head weights should{' ' if tied_weights_requested_base else ' not'} be tied according to the base model config (tie_word_embeddings), which contradicts the head config. Fix this mismatch.")
             else:
                 pass  # This is probably quite normal during finetuning, so we don't raise an error nor a warning.
             delattr(base_model_config, "tie_word_embeddings")
