@@ -340,6 +340,7 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
             base_model_class=type(base_model)
         )
         mwh.model = base_model
+        return mwh
 
     @classmethod
     def from_pretrained(cls, checkpoint: str,
