@@ -209,9 +209,10 @@ class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, Recursi
         Unlink all top-level fields added by HuggingFace. I didn't ask for them. If you need a field, go look for it in
         the subconfigs.
         """
+        protected_fields = set(self._serialised_fields()) | {"_name_or_path", "transformers_version", "architectures"}
         for k, v in list(self.__dict__.items()):
             # if v is None:
-            if k not in {"_name_or_path", "transformers_version", "architectures"}:
+            if k not in protected_fields:
                 delattr(self, k)
 
     def _fields_to_dictables(self) -> dict[str, Union[Any,Dictable]]:
@@ -359,8 +360,6 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
         those will all be in **kwargs. The implementation of RecursivePreTrainedConfig.get_config_dict(...) above will pop
         from those kwargs the parameters that appear this constructor's signature, so that the **kwargs received here are a subset of the original kwargs.
         """
-        super().__init__(**kwargs)
-
         if head_config is None:
             raise ValueError("Missing head information. Provide it either as a dictionary (with a class) or as a HeadConfig object.")
         if base_model_config_class is None and isinstance(base_model_config, dict):
@@ -401,6 +400,8 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
         self.base_model_config: PC = base_model_config
         self.head_config: HC       = head_config
 
+        super().__init__(**kwargs)
+
     @classmethod
     def _fallback_fields(cls) -> list[str]:  # We try to get missing fields from the raw PreTrainedConfig of the base model which is likely what the user meant.
         return ["base_model_config"]
@@ -421,3 +422,25 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
         """Checks whether a pretrained checkpoint is an ArchIt checkpoint. Throws an error if the checkpoint doesn't exist."""
         raw = cls.get_config_dict(checkpoint)
         return all(field in raw for field in cls._serialised_fields())
+
+    # The attention and MoE implementations only matter for the base model. They should NOT be gettable from ArchitConfig
+    # because then ArchitConfig will check ModelWithHead for _supports_XYZ properties. They should NOT be settable on
+    # ArchitConfig, because that is not where the base model will look to decide its implementation (rather, it will
+    # eventually read its subconfig to decide which implementation to use). However, because ModelWithHead.from_pretrained()
+    # should still allow a kwarg to set these implementations, setting it on ArchitConfig is a valid operation which just
+    # redirects to the base model config.
+
+    def __getattr__(self, item: str):
+        if item in {"_attn_implementation_internal", "_experts_implementation_internal"}:  # Explicitly forbid searching deeper.
+            try:
+                return self.__dict__[item]
+            except KeyError:
+                raise AttributeError
+        else:  # The recursive implementation.
+            super().__getattr__(item)
+
+    def __setattr__(self, key: str, value):
+        if key in {"_attn_implementation_internal", "_experts_implementation_internal"}:  # Immediately go deeper.
+            return setattr(self.base_model_config, key, value)
+        else:  # The standard implementation.
+            super().__setattr__(key, value)
