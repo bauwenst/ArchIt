@@ -437,7 +437,7 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
             except KeyError:
                 raise AttributeError
         else:  # The recursive implementation.
-            super().__getattr__(item)
+            return super().__getattr__(item)
 
     def __setattr__(self, key: str, value):
         if key in {"_attn_implementation_internal", "_experts_implementation_internal"}:  # Immediately go deeper.
