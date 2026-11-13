@@ -164,6 +164,7 @@ class PeriModernBertEncoderLayer(nn.Module):
     def __init__(self, config: PeriModernBertConfig, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
+        self.attention_type = config.layer_types[layer_idx]
 
         self.pre_norm_att  = PeriModernBertNorm(config)
         self.attn          = PeriModernBertAttention(config, layer_idx=layer_idx)
