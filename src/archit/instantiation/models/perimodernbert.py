@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from transformers.models.modernbert.modeling_modernbert import ModernBertModel, ModernBertConfig, ModernBertAttention, \
-    ModernBertMLP, ModernBertPreTrainedModel
+    ModernBertMLP, ModernBertPreTrainedModel, Unpack, TransformersKwargs
 
 
 NormType = Literal["ln", "rms"]
@@ -179,21 +179,15 @@ class PeriModernBertEncoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
-        output_attentions: Optional[bool] = False,
+        attention_mask: torch.Tensor | None = None,
+        position_embeddings: torch.Tensor | None = None,
+        **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
         # y = x + Dropout(Norm(Att(Norm(x))))
         attention_output_and_weights = self.attn(self.pre_norm_att(hidden_states),
+            position_embeddings=position_embeddings,
             attention_mask=attention_mask,
-            sliding_window_mask=sliding_window_mask,
-            position_ids=position_ids,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            output_attentions=output_attentions,
+            **kwargs,
         )
         block_output, extra_output = attention_output_and_weights[0], attention_output_and_weights[1:]
         hidden_states = hidden_states + self.dropout_att(self.post_norm_att(block_output))
@@ -205,7 +199,7 @@ class PeriModernBertEncoderLayer(nn.Module):
         else:
             hidden_states = hidden_states + self.dropout_mlp(self.compiled_mlp(hidden_states))
 
-        return (hidden_states,) + extra_output
+        return hidden_states
 
     @torch.compile(dynamic=True)
     def compiled_mlp(self, hidden_states: torch.Tensor) -> torch.Tensor:
