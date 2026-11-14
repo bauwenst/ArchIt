@@ -2,8 +2,8 @@
 Defines the three config objects for ArchIt's three main classes.
 """
 from __future__ import annotations
-from typing import TypeVar, Generic, Union, Protocol, Any, TYPE_CHECKING, Optional
-from typing_extensions import Self, runtime_checkable
+from typing import TypeVar, Generic, Union, Any, TYPE_CHECKING, Optional
+from typing_extensions import Self
 from abc import abstractmethod, ABC, ABCMeta
 from dataclasses import dataclass, field
 from transformers import PreTrainedConfig
@@ -237,7 +237,7 @@ class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, Recursi
         ]
 
     def __setattr__(self, key, value):
-        if key in self._deep_fields() and value is None:  # For recursive HF configs specifically: do not allow setting deep None values.
+        if key in self._deep_fields() and value is None:  # For recursive HF configs specifically: do not allow setting deep None values. Necessary because HF runs self._attn_implementation = kwargs.pop("attn_implementation", None) during config construction, which would otherwise clobber a value already in a subconfig.
             return
 
         return RecursiveAccessible.__setattr__(self, key, value)
@@ -460,19 +460,3 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
         """Checks whether a pretrained checkpoint is an ArchIt checkpoint. Throws an error if the checkpoint doesn't exist."""
         raw = cls.get_config_dict(checkpoint)
         return all(field in raw for field in cls._serialised_fields())
-
-    # The attention and MoE implementations only matter for the base model. They should NOT be gettable from ArchitConfig
-    # because then ArchitConfig will check ModelWithHead for _supports_XYZ properties. They should NOT be settable on
-    # ArchitConfig, because that is not where the base model will look to decide its implementation (rather, it will
-    # eventually read its subconfig to decide which implementation to use). However, because ModelWithHead.from_pretrained()
-    # should still allow a kwarg to set these implementations, setting it on ArchitConfig is a valid operation which just
-    # redirects to the base model config (already implemented by RecursiveAccessible.__setattr__).
-
-    def __getattr__(self, item: str):
-        if item in self._deep_fields():  # Explicitly forbid searching deeper.
-            try:
-                return self.__dict__[item]
-            except KeyError:
-                raise AttributeError
-        else:  # The recursive implementation.
-            return super().__getattr__(item)

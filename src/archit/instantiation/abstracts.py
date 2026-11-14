@@ -152,16 +152,6 @@ class BaseModel(PreTrainedModel, Generic[PC], ABC):
         """
         return cls.coreClass()(raw_config)
 
-    # In ArchIt, specifying that you want FA2 is NEVER done in the .from_pretrained() call and also NEVER as a field in
-    # ArchitConfig (because ArchitConfig only has a few fields). If the user wants it, it will always be in the PreTrainedConfig
-    # of the base model.
-    # Since it is the class instantiated with an FA2-requesting config that needs to have a flag set to prevent an
-    # error, the above observation means that we need to set a flag in all the classes instantiated with the base model
-    # PreTrainedConfig. There are two such classes: the class of the core (which often multiplexes between attention
-    # implementations, and thus the HuggingFace devs have already set the relevant flags when designing it) but ALSO the
-    # BaseModel wrapper. Hence, we let class field accesses like BaseModel._supports_flash_attn_2 evaluate to the
-    # core's ._supports_flash_attn_2 class field.
-
     @classproperty
     def _supports_sdpa(cls):
         return cls.coreClass()._supports_sdpa
@@ -266,6 +256,31 @@ class ModelWithHead(PreTrainedModel, Generic[PC,HC], ABC):
             self.head._init_weights(module)
         else:
             super()._init_weights(module)
+
+    # In ArchIt, specifying that you want a certain attention implementation (e.g. FA2) can be done in the
+    # PreTrainedConfig of the base model, or on the ForABC.from_pretrained() call.
+    #
+    # Allowing the latter has a tricky side-effect: it means that ArchitConfig must have the capability to recursively set
+    # the attention implementation on its nested PreTrainedConfig. This deep setter brings two issues with it.
+    #
+    #   1. HF makes the constructor automatically set attention implementation to None, overwriting the value that may
+    #      have been passed inside the PreTrainedConfig. This can be solved by preventing deep None setting.
+    #   2. If ArchitConfig doesn't have a deep getter to discover that it already has an attention implementation, then
+    #      an auto-set will decide to deep set a not-None value like "eager" etc.
+    #
+    # The latter can be solved by giving ArchitConfig a deep getter: if its nested PretrainedConfig has an attention
+    # implementation, then it has the same one.
+    # However, this then means that in the constructor of the PreTrainedModel whose config class is ArchitConfig, namely
+    # ModelWithHead, a check will be made for _supports_XYZ. It is logically impossible to answer this check, because
+    # it depends on the base model inside the ModelWithHead and it is only constructed AFTER that check.
+    # Therefore, rather than implementing _supports_XYZ methods, ModelWithHead disables those checks. They will still be
+    # run by the base model, though.
+
+    def _check_and_adjust_attn_implementation(self, attn_implementation: Optional[str], is_init_check: bool=False, allow_all_kernels: bool=False) -> str:
+        pass
+
+    def _check_and_adjust_experts_implementation(self, experts_implementation: Optional[str]) -> str:
+        pass
 
     # base + head
 
