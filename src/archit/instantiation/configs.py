@@ -95,6 +95,13 @@ class RecursiveAccessible(ABC):
     @classmethod
     @abstractmethod
     def _fallback_fields(cls) -> list[str]:
+        """If a field is missing, go look for it in these fields."""
+        pass
+
+    @classmethod
+    @abstractmethod
+    def _deep_fields(cls) -> list[str]:
+        """When a get/set of this field is done, ALWAYS look for it in the fallback fields."""
         pass
 
     def __getattr__(self, item):
@@ -102,6 +109,8 @@ class RecursiveAccessible(ABC):
         When you can't find an item on this object (self.item), go look inside the fallback fields in order, then error.
         """
         try:
+            if item in self._deep_fields():  # Jump to the except, as if the field does not exist.
+                raise AttributeError()
             return super().__getattr__(item)  # The old implementation. Will find methods and fields if they exist. (Should basically never be the case because __getattr__ is by definition for when they don't exist.)
         except AttributeError:
             for fallback in self._fallback_fields():
@@ -115,6 +124,22 @@ class RecursiveAccessible(ABC):
             else:
                 raise AttributeError(item)
 
+    def __setattr__(self, key, value):
+        if key not in self._deep_fields():
+            return super().__setattr__(key, value)
+        else:  # For deep fields, immediately set it on the first fallback that exists and allows.
+            for fallback in self._fallback_fields():
+                if fallback not in self.__dict__:
+                    continue
+                try:
+                    obj = getattr(self, fallback)
+                    return setattr(obj, key, value)
+                except AttributeError:
+                    pass
+            else:
+                raise AttributeError(key)
+
+    # TODO: Probably want to remove this given the buggy behaviour of dataclasses.
     def __delattr__(self, item):  # Deletes one, not all instances, just like __getattr__ returns only the first instance. NOTE: Better not delete a dataclass attribute. It has unexpected behaviour.
         try:
             return super().__delattr__(item)
@@ -203,6 +228,19 @@ class RecursivePreTrainedConfig(PreTrainedConfig, RecursiveSerialisable, Recursi
         return PreTrainedConfig.from_dict.__func__(cls, config_dict, **kwargs)  # Equivalent to cls(**config_dict) but with some extra HF stuff. The reason we use __func__ is so that the cls parameter is not bound to cls=PreTrainedConfig but rather the cls here.
 
     ### Implementations that hardcode some HuggingFace properties
+
+    @classmethod
+    def _deep_fields(cls) -> list[str]:
+        return [
+            "_attn_implementation_internal",
+            "_experts_implementation_internal",
+        ]
+
+    def __setattr__(self, key, value):
+        if key in self._deep_fields() and value is None:  # For recursive HF configs specifically: do not allow setting deep None values.
+            return
+
+        return RecursiveAccessible.__setattr__(self, key, value)
 
     def _deleteTopLevelFields(self):
         """
@@ -428,19 +466,13 @@ class ArchitConfig(RecursivePreTrainedConfig, Generic[PC,HC]):
     # ArchitConfig, because that is not where the base model will look to decide its implementation (rather, it will
     # eventually read its subconfig to decide which implementation to use). However, because ModelWithHead.from_pretrained()
     # should still allow a kwarg to set these implementations, setting it on ArchitConfig is a valid operation which just
-    # redirects to the base model config.
+    # redirects to the base model config (already implemented by RecursiveAccessible.__setattr__).
 
     def __getattr__(self, item: str):
-        if item in {"_attn_implementation_internal", "_experts_implementation_internal"}:  # Explicitly forbid searching deeper.
+        if item in self._deep_fields():  # Explicitly forbid searching deeper.
             try:
                 return self.__dict__[item]
             except KeyError:
                 raise AttributeError
         else:  # The recursive implementation.
             return super().__getattr__(item)
-
-    def __setattr__(self, key: str, value):
-        if key in {"_attn_implementation_internal", "_experts_implementation_internal"}:  # Immediately go deeper.
-            return setattr(self.base_model_config, key, value)
-        else:  # The standard implementation.
-            super().__setattr__(key, value)
