@@ -6,7 +6,7 @@ from typing import Optional, Literal
 
 import torch
 from torch import nn
-
+from transformers import GradientCheckpointingLayer
 from transformers.models.modernbert.modeling_modernbert import ModernBertModel, ModernBertConfig, ModernBertAttention, \
     ModernBertMLP, ModernBertPreTrainedModel, Unpack, TransformersKwargs
 
@@ -156,7 +156,7 @@ class PeriModernBertAttention(ModernBertAttention):
         self.attention_dropout = config.softmax_dropout  # HF's software design practices are super shady, but basically the SDPA implementation accesses this field on this nn.Module to get the softmax dropout probability. In ModernBertAttention, the config field used for this is the SAME FIELD as is used for the attention block's output dropout, which makes no sense since they have wildly different effects.
 
 
-class PeriModernBertEncoderLayer(nn.Module):
+class PeriModernBertEncoderLayer(GradientCheckpointingLayer):
     """
     Encoder for ModernBERT but with peri-norming (and associated dropout) before the residual.
     """

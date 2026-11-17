@@ -1,9 +1,10 @@
 from enum import Enum
 from pathlib import Path
-from torch import Tensor
+from torch import Tensor, dtype
 from torch.nn import Module
 from transformers import PreTrainedModel
 
+from collections import Counter
 import inspect
 from dataclasses import fields
 from transformers.utils import cached_file, WEIGHTS_NAME
@@ -47,6 +48,16 @@ def parameterCountBaseVsHead(model: PreTrainedModel) -> tuple[tuple[int,int], tu
     base_trainable, base_total = parameterCount(model.base_model)
     all_trainable, all_total   = parameterCount(model)
     return (base_trainable, base_total), (all_trainable - base_trainable, all_total - base_total)
+
+
+def parameterTypeCount(module: Module) -> Counter[dtype]:
+    """Summarize floating-point parameter dtypes by element count (model-agnostic)."""
+    type_counts = Counter()
+    for p in module.parameters():
+        if p.is_floating_point():
+            type_counts[p.dtype] += p.numel()
+
+    return type_counts
 
 
 def checkpointToStateDict(checkpoint: str) -> dict[str,Tensor]:
